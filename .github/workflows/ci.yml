@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  checks:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Check default features
+        run: cargo check --all-targets --locked
+      - name: Check no default features
+        run: cargo check --no-default-features --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Unit and binary tests
+        run: cargo test --lib --bins --locked
+      - name: Doctests
+        run: cargo test --doc --locked
+      - name: Package
+        run: cargo package --locked
+
+  runtime-smoke:
+    name: Embedded Postgres smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92
+      - uses: Swatinem/rust-cache@v2
+      - name: Runtime smoke
+        run: cargo test --test runtime_smoke --locked -- --nocapture
+      - name: Proxy smoke
+        run: cargo test --test proxy_smoke --locked -- --nocapture
+      - name: Client compatibility
+        run: cargo test --test client_compat --locked -- --nocapture
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2

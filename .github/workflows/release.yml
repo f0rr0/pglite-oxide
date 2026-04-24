@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Prepare a release PR, dry-run publish, or publish from main
+        required: true
+        type: choice
+        default: prepare-release-pr
+        options:
+          - prepare-release-pr
+          - publish-dry-run
+          - publish
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  prepare-release-pr:
+    name: Prepare release PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ github.repository == 'f0rr0/pglite-oxide' && inputs.operation == 'prepare-release-pr' }}
+    steps:
+      - name: Require main
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Releases must be run from main; got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92
+
+      - name: Create or update release PR
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: ${{ github.repository == 'f0rr0/pglite-oxide' && inputs.operation != 'prepare-release-pr' }}
+    environment: ${{ inputs.operation == 'publish' && 'crates-io' || 'release-dry-run' }}
+    steps:
+      - name: Require main
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Releases must be run from main; got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Check default features
+        run: cargo check --all-targets --locked
+
+      - name: Check no default features
+        run: cargo check --no-default-features --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Unit and binary tests
+        run: cargo test --lib --bins --locked
+
+      - name: Doctests
+        run: cargo test --doc --locked
+
+      - name: Runtime smoke
+        run: cargo test --test runtime_smoke --locked -- --nocapture
+
+      - name: Proxy smoke
+        run: cargo test --test proxy_smoke --locked -- --nocapture
+
+      - name: Client compatibility
+        run: cargo test --test client_compat --locked -- --nocapture
+
+      - name: Supply-chain policy
+        uses: EmbarkStudios/cargo-deny-action@v2
+
+      - name: Inspect package contents
+        run: cargo package --locked --list
+
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+          dry_run: ${{ inputs.operation == 'publish-dry-run' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

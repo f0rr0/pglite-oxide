@@ -1,0 +1,41 @@
+name: Conventional Commits
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: conventional-commits-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventional:
+    name: Validate commit and PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check PR title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: ./.github/scripts/check-conventional-commit.sh "$PR_TITLE"
+      - name: Check release intent for package changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: ./.github/scripts/check-release-intent.sh "$PR_TITLE" "$BASE_SHA" "$HEAD_SHA" "$HEAD_BRANCH"
+      - name: Check HEAD commit subject
+        run: ./.github/scripts/check-conventional-commit.sh "$(git log -1 --pretty=%s)"

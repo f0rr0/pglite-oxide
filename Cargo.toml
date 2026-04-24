@@ -1,8 +1,8 @@
 [package]
 name = "pglite-oxide"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.74"
+edition = "2024"
+rust-version = "1.92"
 description = "Rust helpers for embedding the Electric SQL pglite WebAssembly PostgreSQL runtime"
 readme = "README.md"
 repository = "https://github.com/f0rr0/pglite-oxide"
@@ -10,26 +10,82 @@ homepage = "https://github.com/f0rr0/pglite-oxide"
 documentation = "https://docs.rs/pglite-oxide"
 keywords = ["postgres", "pglite", "wasm", "database", "embedded"]
 categories = ["database-implementations", "wasm", "development-tools::testing"]
-license = "MIT"
-exclude = ["Cargo.toml.orig"]
+license = "MIT AND Apache-2.0 AND PostgreSQL"
+publish = ["crates-io"]
+exclude = [
+  ".config/**",
+  ".github/**",
+  "Cargo.toml.orig",
+  "assets/bin/pg_dump.wasm",
+  "assets/extensions/vector.tar.gz",
+  "assets/pglite.data",
+  "assets/pglite.wasi",
+  "docs/ALIGNMENT_DIFF.md",
+  "docs/ALIGNMENT_NOTES.md",
+  "docs/RUST_PORT_PLAN.md",
+  "docs/reviews/**",
+  "release-plz.toml",
+]
+
+[features]
+default = ["runtime-cache"]
+runtime-cache = ["wasmtime/cache"]
+
+[package.metadata.pglite-oxide.assets]
+postgres-version = "17.5"
+postgres-pglite-branch = "REL_17_5-pglite"
+pglite-build-repo = "electric-sql/pglite-build"
+pglite-build-branch = "gh-pages"
+pglite-build-commit = "4c78ee29513799a51d4e1f75008cf9c3f00b11e9"
+pglite-npm-version-checked = "0.4.4"
+runtime-archive-sha256 = "c725235f22a4fd50fed363f4065edb151a716fa769cba66f2383b8b854e6bdb5"
+pglite-wasi-sha256 = "a72b96adcd4ce40c51dd7201ee76a90f1b5799f633753b9cbb3c9af7b79f8da5"
+pglite-data-sha256 = "791a44e2ad1d48830714fb54e8662a3372618883566a0af7fc9f6b8375ab82d1"
+pglite-fs-manifest-sha256 = "880c9c058f416aad6ddc33fe0a1c84f6213b40c2b378e32587d25167d2f346f5"
 
 [dependencies]
 anyhow = "1"
 tar = "0.4"
 xz2 = "0.1"
-directories = "5"
-wasmtime = "19"
-wasmtime-wasi = { version = "19", default-features = false, features = ["preview1"] }
-cap-std = "3"
-getrandom = "0.2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+directories = "6"
+wasmtime = { version = "44", default-features = false, features = [
+  "cranelift",
+  "parallel-compilation",
+  "runtime",
+] }
+wasmtime-wasi = { version = "44", default-features = false, features = ["p1"] }
+getrandom = "0.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-once_cell = "1.19"
 flate2 = "1"
-md-5 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+tempfile = "3"
+hex = "0.4"
 
 [dev-dependencies]
-tempfile = "3"
-anyhow = "1"
-serial_test = "3"
+sqlx = { version = "0.8", default-features = false, features = [
+  "postgres",
+  "runtime-tokio",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-postgres = "0.7"
+
+[[bin]]
+name = "pglite-dump"
+path = "src/bin/pglite_dump.rs"
+
+[[bin]]
+name = "pglite-manifest-sync"
+path = "src/bin/pglite_manifest_sync.rs"
+
+[[bin]]
+name = "pglite-proxy"
+path = "src/bin/pglite_proxy.rs"
+
+[profile.dev.package.wasmtime-internal-cache]
+# Wasmtime's internal cache crate keys debug builds by the current executable
+# mtime. That defeats the compiled-module cache after ordinary edit/rebuild
+# cycles, so keep this dependency on the stable release-style cache namespace
+# during local dev and tests.
+debug-assertions = false

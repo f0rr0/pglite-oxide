@@ -1,0 +1,27 @@
+name: Bug report
+description: Report incorrect behavior in pglite-oxide.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal Rust code or commands that reproduce the issue.
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: pglite-oxide, Rust, OS, and architecture.
+    validations:
+      required: true

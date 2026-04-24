@@ -1,205 +1,234 @@
 # pglite-oxide
 
-pglite-oxide is the Rust companion to the [Electric SQL pglite](https://github.com/electric-sql/pglite) [WASM builds](https://github.com/electric-sql/pglite-build). It gives a consumer-level API for installing and running a self-contained PostgreSQL 17.x instance inside a WebAssembly guest, so you can embed "real Postgres" into CLI tools, desktop apps, server side functions, or tests without talking to a separate Postgres service. This document explains how to install the kit, the modes it supports, and the knobs you can turn to adapt it to your own runtime.
+[![CI](https://github.com/f0rr0/pglite-oxide/actions/workflows/ci.yml/badge.svg)](https://github.com/f0rr0/pglite-oxide/actions/workflows/ci.yml)
 
-## Installation Patterns
+`pglite-oxide` embeds the [Electric SQL PGlite](https://github.com/electric-sql/pglite)
+WASI PostgreSQL runtime in a Rust library. It installs the bundled runtime, starts
+Postgres inside Wasmtime, and exposes a small synchronous API for executing SQL
+without a separate database server. It can also expose the embedded backend over
+a local PostgreSQL socket for Rust clients such as SQLx and `tokio-postgres`.
 
-The crate ships with a prebuilt pglite-wasi.tar.xz. You have three options for provisioning it:
+The crate currently targets PostgreSQL 17.x PGlite builds, Rust 1.92+, and
+Wasmtime 44.
 
-### Default initialization (recommended)
+## Quick Start
 
-```rust
-let paths = pglite_oxide::install_and_init(("com", "example", "app"))?;
-```
+```rust,no_run
+use pglite_oxide::Pglite;
+use serde_json::json;
 
-- Installs the WASM runtime into the operating system's data directory for that app ID (see directories::ProjectDirs).
-- Runs pg_initdb inside the WASM guest.
-- Returns PglitePaths { pgroot, pgdata } where pgroot holds the runtime and pgdata is the database cluster.
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::builder().path("./.pglite").open()?;
 
-### Specify an explicit mount root
+    db.exec("CREATE TABLE IF NOT EXISTS items(value TEXT)", None)?;
+    db.query(
+        "INSERT INTO items(value) VALUES ($1)",
+        &[json!("alpha")],
+        None,
+    )?;
 
-```rust
-let paths = pglite_oxide::install_and_init_in("/custom/location")?;
-```
+    let result = db.query("SELECT value FROM items", &[], None)?;
+    println!("{:?}", result.rows);
 
-Useful for portable binaries or integration tests where you want to keep the runtime under /tmp, inside your project tree, etc.
-
-### Fine-grained control
-
-```rust
-let paths = pglite_oxide::install_with_options(
-    PglitePaths::with_root("/opt/pglite"),
-    InstallOptions { ensure_cluster: false },
-)?;
-```
-
-- You can skip initdb if you only want the runtime binaries.
-- Later call ensure_cluster(&paths) manually once you want a database.
-
-All of the helpers detect existing installs: if tmp/pglite/base/PG_VERSION or /tmp/pglite/base/PG_VERSION already exists, the kit reuses them instead of unpacking another archive.
-
-## Runtime API ("interactive" module)
-
-Most consumers only need the top-level functions in pglite_oxide::interactive:
-
-| Function | Purpose |
-|----------|---------|
-| `prepare_default_mount()` | Returns MountInfo with the auto-detected runtime + cluster, creating them on demand. The example binary uses this. |
-| `wasm_import(alias, path)` | Ensures the default session is initialized and returns the path to the WASM module (you can use this if you need to spawn your own Wasmtime instance). |
-| `exec_interactive(PokeInput)` | Sends bytes over the WASM-backed Postgres wire protocol and returns the raw response. This performs the full startup handshake the first time it runs. |
-| `poke(PokeInput) + interactive_one()` | Lower-level helpers for REPL-style usage; poke flashes SQL into the shared buffer and interactive_one ticks the host once. |
-| `run_pg_dump(argv, env)` | Invokes the optional pg_dump shim if it exists in the runtime. Returns Ok(None) when the archive didn't include that artifact. |
-| `default_mount()` | Gives you the same MountInfo the global runtime uses (good for exposing the socket path or the installation root). |
-| `start_proxy(use_tcp)` | Launches the full socket proxy to /tmp/.s.PGSQL.5432 (Unix) or 0.0.0.0:5432 (TCP). This allows external clients like psql to connect to the WASM backend. |
-
-PokeInput accepts either &str (we append the null terminator) or raw bytes.
-
-### Under the hood
-
-The crate decides between two transports:
-
-- **CMA channel available** – the WASM exports a shared-memory channel (get_channel() >= 0). The kit writes requests directly into the CMA buffer and issues interactive_write(len).
-- **File-based fallback** – when the CMA channel is missing, the kit uses the .in/.out lock files (/tmp/pglite/base/.s.PGSQL.5432{.in,.out}). The run_tests_quick helper only runs when we're in file mode.
-
-You normally don't need to reason about which transport is active; the helpers handle that automatically.
-
-## Knobs & Environment
-
-When we instantiate the WASI context (standard_wasi_builder), we pre-open three directories inside the guest:
-
-- `/tmp` -> the runtime root (pgroot)
-- `/tmp/pglite/base` -> the cluster data directory (pgdata)
-- `/dev` -> a shim directory for things like urandom
-
-We also set the environment variables Postgres expects:
-
-| Environment variable | Default |
-|---------------------|---------|
-| `ENVIRONMENT` | wasm32_wasi_preview1 |
-| `PREFIX` / `PGDATA` / `PGSYSCONFDIR` | /tmp/pglite / /tmp/pglite/base / /tmp/pglite |
-| `PGUSER` / `PGDATABASE` | postgres / template1 |
-| `MODE` / `REPL` | REACT / N |
-| `PGCLIENTENCODING`, `LC_CTYPE`, `PG_COLOR`, `PATH`, `TZ`, `PGTZ` | Standard defaults |
-
-Override them by modifying the WasiCtxBuilder before you call into interactive::wasm_import or interactive::exec_interactive. For advanced scenarios, grab the builder yourself:
-
-```rust
-let mut builder = pglite_oxide::standard_wasi_builder(&paths)?;
-builder.env("PGDATABASE", "custom_db");
-```
-
-Similarly, you can provide different runtime modules by passing Some(path) into wasm_import, or by placing alternate .wasi files under paths.pgroot/pglite/bin/.
-
-## Embedding Patterns
-
-### Run ad-hoc SQL within Rust
-
-```rust
-let response = interactive::exec_interactive(PokeInput::Str("SELECT 42;"))?;
-println!("{}", interactive::hexc(&response, "<-", Some(4)));
-```
-
-You get the raw Postgres wire response. For higher-level decoding plug in a Postgres wire parser (e.g. tokio-postgres's frame decoder) or reuse the CMA buffer via poke + interactive_one.
-
-### Expose a real Postgres socket
-
-```rust
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Start a Unix domain socket at /tmp/.s.PGSQL.5432
-    interactive::start_proxy(false).await
+    db.close()?;
+    Ok(())
 }
 ```
 
-This gives external tools access to the WASM backend. The proxy forwards raw startup packets, handles CMA/file transport, and recovers from interactive_one traps by clearing the channel.
+Use `Pglite::temporary()?` for an ephemeral database in tests; it clones a
+process-local template cluster so repeated tests do not rerun `initdb`.
 
-### Ship pg_dump in your application
+## PostgreSQL Client Compatibility
 
-Call `run_pg_dump(&["pg_dump", "--schema-only"], &[("PGDATABASE", "mydb")])` to execute the embedded CLI. The helper returns Ok(None) if the asset isn't bundled.
+Use `PgliteServer` when a library expects a PostgreSQL connection string. The
+server owns one embedded backend, so configure downstream pools with a single
+connection.
 
-### Custom runtimes (CI builds, development)
+```rust,no_run
+use pglite_oxide::PgliteServer;
+use sqlx::{Connection, Row};
 
-Place an alternate pglite.wasi somewhere and let `wasm_import("postgres", Some(custom_path))` resolve it. The crate's installer already honors tmp/pglite vs /tmp/pglite detection, so you can drop a development build into /tmp/pglite and the kit will reuse it.
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let server = PgliteServer::temporary_tcp()?;
+    let mut conn = sqlx::PgConnection::connect(&server.connection_uri()).await?;
 
-## Managing the Data Directory
+    let row = sqlx::query("SELECT $1::int4 + 1 AS answer")
+        .bind(41_i32)
+        .fetch_one(&mut conn)
+        .await?;
+    assert_eq!(row.try_get::<i32, _>("answer")?, 42);
 
-PglitePaths exposes pgroot and pgdata. The kit writes a marker file (PG_VERSION) after initdb. You can safely remove the pgroot directory between runs to force a clean install:
-
-```rust
-std::fs::remove_dir_all(paths.pgroot)?;
+    conn.close().await?;
+    server.shutdown()?;
+    Ok(())
+}
 ```
 
-During testing, the smoke suite uses temporary directories (see tests/pglite_smoke.rs) and ensures we clean them up afterwards.
+For app persistence, use `PgliteServer::builder().path("./.pglite").start()?`.
+For Rust code that does not require a connection URI, prefer the direct
+`Pglite` API because it avoids the socket/protocol compatibility layer.
+For desktop app shape and state management notes, see
+[`docs/TAURI.md`](docs/TAURI.md).
 
-### Runtime layout
+## Runtime API
 
-The unpacked runtime lives under `<mount>/pglite/` with familiar Postgres directories (`bin`, `lib`, `share`, `password`, `tmp`). Core extensions, including `plpgsql`, ship in `share/extension` so they are ready for immediate use inside the WASM guest.
+`Pglite` is the main entry point.
 
-## Example Binary (runtime_showcase)
+- `Pglite::builder()` configures persistent, app-data, or temporary databases.
+- `Pglite::open(path)` opens a persistent database rooted at `path`.
+- `Pglite::temporary()` opens a cached ephemeral database for tests.
+- `exec(sql, options)` runs simple SQL and returns zero or more result sets.
+- `query(sql, params, options)` uses the extended protocol with JSON parameters.
+- `describe_query(sql, options)` returns parameter and row metadata.
+- `transaction(|tx| ...)` runs `BEGIN`/`COMMIT` with rollback on error.
+- `listen`, `unlisten`, and `on_notification` support PostgreSQL notifications.
+- `close()` shuts down the embedded backend.
+- `PgliteServer` exposes a local PostgreSQL socket for existing client crates.
 
-Build and run:
+Values are passed as `serde_json::Value`. Default parsers and serializers cover
+common Postgres types including integers, floats, booleans, JSON/JSONB, bytea,
+dates/timestamps, UUIDs, and arrays discovered from `pg_type`.
 
-```bash
-cargo run -p pglite-oxide --example runtime_showcase
-```
+## Query Options
 
-The example prints the mount root, socket path, whether it reused an existing install, then runs a simple SELECT 1; through exec_interactive and logs the hex-dump of the response. It finishes by invoking pg_dump --version.
+`QueryOptions` controls result parsing and protocol behavior:
 
-## Proxy Example (psql-friendly)
+```rust,no_run
+use pglite_oxide::{Pglite, QueryOptions, RowMode};
 
-Expose a Postgres-compatible socket for GUI tools or `psql` by running:
-
-```bash
-cargo run -p pglite-oxide --example proxy_showcase
-```
-
-By default the example binds the canonical Unix socket `/tmp/.s.PGSQL.5432`. GUI tools that support sockets usually expose it as a “socket directory” field—point them at `/tmp`, with user `postgres` and database `template1`. The libpq-style connection URI looks like:
-
-```
-postgresql://postgres@/template1?host=/tmp
-```
-
-Pass `--tcp` after the `--` delimiter to listen on `0.0.0.0:5432` instead:
-
-```bash
-cargo run -p pglite-oxide --example proxy_showcase -- --tcp
-```
-
-Clients can then use a standard URI such as `postgresql://postgres@127.0.0.1:5432/template1`. Use `--uds` to return to socket mode. Hit Ctrl+C when you want to tear the proxy down.
-
-## Proxy Lifecycles and Error Handling
-
-- The interactive session lazily performs the wire handshake on the first exec_interactive call. If you use poke + interactive_one without calling use_wire(true), it stays in the REPL (non-wire) mode.
-- When interactive_one throws a WASM trap, the runtime recovers by: clear_error(), resets the CMA length (interactive_write(-1)), and can re-attempt the handshake.
-- start_proxy runs run_tests_quick() only in file-transport mode. That helper feeds a handful of SQL statements via REPL to prove the backend responds before accepting real connections.
-
-## Summary of Key Types
-
-- **PglitePaths** – descriptive struct with pgroot and pgdata.
-- **MountInfo** – wraps PglitePaths and tracks the mount root, socket path, and whether an existing install was reused.
-- **InteractiveRuntime** – owns the Wasmtime engine, store, and exports. Normally you access it through the global with_default_runtime.
-- **Transport enum** – internal, describes CMA vs file transport (automatic).
-- **PokeInput<'a>** – either Str(&'a str) or Bytes(&'a [u8]).
-
-## Putting It Together
-
-A minimal "headless Postgres in WASM" flow looks like:
-
-```rust
 fn main() -> anyhow::Result<()> {
-    // Ensure the runtime and cluster exist (or reuse an existing /tmp/pglite)
-    let _mount = pglite_oxide::prepare_default_mount()?;
+    let mut db = Pglite::open("./.pglite")?;
 
-    // Run SQL inside the WASM backend
-    let response = pglite_oxide::interactive::exec_interactive(
-        pglite_oxide::interactive::PokeInput::Str("SELECT current_database();")
-    )?;
+    let options = QueryOptions {
+        row_mode: Some(RowMode::Array),
+        ..QueryOptions::default()
+    };
 
-    println!(
-        "Postgres wire response:\n{}",
-        pglite_oxide::interactive::hexc(&response, "<-", Some(6))
-    );
+    let _rows = db.query("SELECT 1, 2", &[], Some(&options))?;
 
     Ok(())
 }
 ```
+
+For `COPY ... FROM '/dev/blob'`, set `QueryOptions::blob` to the bytes to expose
+through the guest `/dev/blob`. For `COPY ... TO '/dev/blob'`, read the returned
+`Results::blob`.
+
+## SQL Templating Helpers
+
+```rust,no_run
+use pglite_oxide::{Pglite, QueryTemplate, format_query, quote_identifier};
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+
+    let sql = format_query(&mut db, "SELECT $1::int", &[json!(42)])?;
+    assert_eq!(sql, "SELECT '42'::int");
+
+    let mut template = QueryTemplate::new();
+    template.push_sql("SELECT * FROM ");
+    template.push_identifier("items");
+    template.push_sql(" WHERE value = ");
+    template.push_param(json!("alpha"));
+    let built = template.build();
+
+    assert_eq!(built.query, "SELECT * FROM \"items\" WHERE value = $1");
+    assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
+
+    Ok(())
+}
+```
+
+## Runtime Notes
+
+The embedded backend uses the same shared-memory CMA protocol as upstream
+PGlite. The host preopens:
+
+- `/tmp` as the runtime root
+- `/tmp/pglite/base` as the Postgres data directory
+- `/home` for runtime home files
+- `/dev` for small device shims such as `urandom`
+
+The first instance in a process can take a while because Wasmtime compiles the
+large PGlite WASM module and the first temporary cluster runs `initdb`. Compiled
+modules are cached inside the process so additional `Pglite` instances avoid the
+same compile cost. `Pglite::temporary()` also clones a process-local template
+cluster, so later temporary databases in the same test process only copy the
+prepared filesystem. Use `Pglite::builder().fresh_temporary().open()?` when a
+test needs to exercise fresh cluster initialization.
+
+Opening an existing cluster still invokes PGlite's `initdb` export because the
+WASM runtime uses that entry point for in-memory backend setup too. Existing data
+is preserved; the full cluster creation work is avoided once `PG_VERSION` exists.
+
+The default `runtime-cache` feature also enables Wasmtime's persistent compiled
+module cache, so later processes can reuse native code for the same PGlite WASM
+module. Disable it with `default-features = false` if you need to avoid global
+cache writes.
+
+For fast local test loops in a downstream workspace, add the same profile
+override used by this repository. Wasmtime's debug cache otherwise keys entries
+by the rebuilt test binary mtime, which defeats reuse after ordinary edits:
+
+```toml
+[profile.dev.package.wasmtime-internal-cache]
+debug-assertions = false
+```
+
+For larger downstream suites, prefer reusing one `Pglite` instance per test when
+isolation allows it, and use `fresh_temporary` only for initialization-specific
+coverage.
+
+`PgliteServer` is deliberately blocking and handles one frontend connection at a
+time against a single embedded backend. It refuses SSL/GSS negotiation requests
+with the standard PostgreSQL `N` response; connection URIs generated by the
+crate include `sslmode=disable`.
+
+```sh
+cargo run --bin pglite-proxy -- --root ./.pglite --tcp 127.0.0.1:5432
+psql 'postgresql://postgres@127.0.0.1:5432/template1?sslmode=disable'
+```
+
+On Unix systems, the default proxy mode is `/tmp/.s.PGSQL.5432`:
+
+```sh
+cargo run --bin pglite-proxy
+PGPASSWORD=postgres psql 'postgresql://postgres@/template1?host=/tmp'
+```
+
+Runtime asset provenance is tracked in `docs/ASSETS.md`.
+Release process details are tracked in `docs/RELEASE.md`.
+
+## Development
+
+The required local gates are:
+
+```sh
+cargo fmt --all --check
+cargo check --all-targets
+cargo check --no-default-features --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo deny check
+cargo test --doc
+cargo test --test runtime_smoke -- --nocapture
+cargo test --test proxy_smoke -- --nocapture
+cargo test --test client_compat -- --nocapture
+cargo package --allow-dirty
+```
+
+Install the supply-chain gate with `cargo install cargo-deny --locked` if it is
+not already available.
+
+`tests/runtime_smoke.rs` starts the real WASM backend and is intentionally slower
+than the protocol unit tests.
+
+## Utilities
+
+Two maintenance binaries are included:
+
+- `pglite-dump` expands the bundled filesystem manifest/runtime assets.
+- `pglite-manifest-sync` syncs `assets/pglite_fs_manifest.json` from the
+  `pglite.js` bundle published on `electric-sql/pglite-build` `gh-pages`.
+- `pglite-proxy` exposes a local PostgreSQL socket backed by the embedded runtime.

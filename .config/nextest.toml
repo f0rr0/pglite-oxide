@@ -1,0 +1,4 @@
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 6, grace-period = "0s" }
+status-level = "fail"
+final-status-level = "fail"

@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a focused API, runtime, or packaging improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What are you trying to build?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The API or behavior you want.
+    validations:
+      required: true

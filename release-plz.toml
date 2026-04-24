@@ -1,0 +1,34 @@
+[workspace]
+changelog_update = true
+dependencies_update = false
+features_always_increment_minor = false
+git_release_enable = true
+git_release_name = "{{ version }}"
+git_tag_name = "{{ version }}"
+pr_branch_prefix = "release-plz-"
+pr_labels = ["release"]
+pr_name = "chore(release): {{ version }}"
+publish = true
+publish_timeout = "30m"
+release_always = false
+release_commits = '^((feat|fix|perf|refactor|revert)(\([a-z0-9][a-z0-9._/-]*\))?(!)?|[a-z]+(\([a-z0-9][a-z0-9._/-]*\))?!): .+'
+repo_url = "https://github.com/f0rr0/pglite-oxide"
+semver_check = true
+
+[changelog]
+protect_breaking_commits = true
+sort_commits = "oldest"
+tag_pattern = '^[0-9]+\.[0-9]+\.[0-9]+.*$'
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^revert", group = "Changed" },
+  { message = "^.*!", group = "Breaking" },
+  { message = "^docs", skip = true },
+  { message = "^test", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^style", skip = true },
+]

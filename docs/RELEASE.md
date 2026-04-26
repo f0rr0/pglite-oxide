@@ -15,6 +15,9 @@ user-facing binary to distribute.
 - Repository Actions settings must allow GitHub Actions to create pull requests.
 - The `Release` workflow needs `contents: write`, `pull-requests: write`, and
   `id-token: write`; these are already declared in the workflow.
+- Do not set `package.publish = ["crates-io"]`; crates.io is Cargo's default
+  registry, and release-plz treats `package.publish` entries as named alternate
+  registries.
 
 ## Release intent
 

@@ -14,21 +14,40 @@ concurrency:
   group: conventional-commits-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  PREK_VERSION: 0.3.10
+
 jobs:
   conventional:
     name: Validate commit and PR title
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install prek
+        uses: taiki-e/install-action@v2
+        with:
+          tool: prek@${{ env.PREK_VERSION }}
+
       - name: Check PR title
         if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: ./.github/scripts/check-conventional-commit.sh "$PR_TITLE"
+        run: |
+          printf '%s\n' "${PR_TITLE}" > "${RUNNER_TEMP}/pr-title.txt"
+          scripts/validate.sh commit-msg "${RUNNER_TEMP}/pr-title.txt"
       - name: Check release intent for package changes
         if: github.event_name == 'pull_request'
         env:
@@ -38,4 +57,6 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: ./.github/scripts/check-release-intent.sh "$PR_TITLE" "$BASE_SHA" "$HEAD_SHA" "$HEAD_BRANCH"
       - name: Check HEAD commit subject
-        run: ./.github/scripts/check-conventional-commit.sh "$(git log -1 --pretty=%s)"
+        run: |
+          git log -1 --pretty=%s > "${RUNNER_TEMP}/head-commit.txt"
+          scripts/validate.sh commit-msg "${RUNNER_TEMP}/head-commit.txt"

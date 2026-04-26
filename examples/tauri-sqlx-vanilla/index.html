@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pglite SQLx profile</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="shell">
+      <section class="masthead" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">pglite-oxide / Tauri / SQLx</p>
+          <h1 id="page-title">Embedded Postgres profile</h1>
+        </div>
+        <div class="status" id="status">Idle</div>
+      </section>
+
+      <form class="toolbar" id="profile-form">
+        <label class="field">
+          <span>Rows</span>
+          <input id="row-count" type="number" min="100" max="50000" step="100" value="10000" />
+        </label>
+        <label class="check">
+          <input id="fresh-run" type="checkbox" checked />
+          <span>Cold profile</span>
+        </label>
+        <button id="run-profile" type="submit">Run profile</button>
+      </form>
+
+      <section class="metrics" aria-label="Profile summary">
+        <article class="metric">
+          <span>Startup</span>
+          <strong id="startup-total">-</strong>
+        </article>
+        <article class="metric">
+          <span>Workload</span>
+          <strong id="workload-total">-</strong>
+        </article>
+        <article class="metric">
+          <span>Rows</span>
+          <strong id="profile-rows">-</strong>
+        </article>
+        <article class="metric">
+          <span>Proxy</span>
+          <strong id="proxy-addr">-</strong>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <header>
+            <h2>Startup phases</h2>
+            <span id="startup-mode">-</span>
+          </header>
+          <div class="phase-list" id="startup-list"></div>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Workload phases</h2>
+            <span id="profile-root">-</span>
+          </header>
+          <div class="phase-list" id="workload-list"></div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <header>
+          <h2>SQLx query timings</h2>
+          <span>P50 / P95 / max</span>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Query</th>
+                <th>Runs</th>
+                <th>Rows</th>
+                <th>Mean</th>
+                <th>P50</th>
+                <th>P95</th>
+                <th>Max</th>
+              </tr>
+            </thead>
+            <tbody id="query-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="notes" id="notes"></section>
+    </main>
+  </body>
+</html>

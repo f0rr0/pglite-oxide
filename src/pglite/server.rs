@@ -82,7 +82,7 @@ impl PgliteServer {
                 let port = parse_unix_socket_port(path).unwrap_or(5432);
                 format!(
                     "postgresql://postgres@/template1?host={}&port={}&sslmode=disable",
-                    host.display(),
+                    percent_encode_query_value(&host.display().to_string()),
                     port
                 )
             }
@@ -316,4 +316,33 @@ fn wait_until_ready(ready_rx: &Receiver<Result<()>>) -> Result<()> {
 fn parse_unix_socket_port(path: &Path) -> Option<u16> {
     let name = path.file_name()?.to_str()?;
     name.strip_prefix(".s.PGSQL.")?.parse().ok()
+}
+
+#[cfg(unix)]
+fn percent_encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/'
+        ) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::percent_encode_query_value;
+
+    #[test]
+    fn unix_socket_uri_host_is_query_encoded() {
+        assert_eq!(
+            percent_encode_query_value("/tmp/Application Support/pglite"),
+            "/tmp/Application%20Support/pglite"
+        );
+    }
 }

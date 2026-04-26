@@ -5,20 +5,29 @@
 Run the same gates as CI before opening a PR:
 
 ```sh
-cargo fmt --all --check
-cargo check --all-targets
-cargo check --no-default-features --all-targets
-cargo clippy --all-targets -- -D warnings
+scripts/validate.sh ci
+scripts/validate.sh release
 cargo deny check
-cargo test --lib --bins
-cargo test --doc
-cargo test --test runtime_smoke -- --nocapture
-cargo test --test proxy_smoke -- --nocapture
-cargo test --test client_compat -- --nocapture
-cargo package --locked --allow-dirty
 ```
 
 The runtime smoke starts embedded Postgres and is intentionally slower than unit tests.
+
+Install local hooks with:
+
+```sh
+scripts/install-hooks.sh
+```
+
+Hooks stay deliberately smaller than CI: pre-commit handles file hygiene and
+formatting, while pre-push runs whitespace diff checking,
+`cargo clippy --all-targets`, and `cargo test --all-targets`. CI repeats those
+hook checks and remains the source of truth for no-default builds, docs,
+packaging, Tauri, frontend, feature combinations, public API compatibility, and
+supply-chain checks.
+
+In GitHub branch protection, require the aggregate `Required checks` status and
+the Conventional Commit status before merging. Local hooks are convenience
+checks and can be skipped; CI is authoritative.
 
 ## Assets
 

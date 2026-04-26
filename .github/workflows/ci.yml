@@ -15,50 +15,114 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  PREK_VERSION: 0.3.10
 
 jobs:
-  checks:
-    name: Rust checks
+  workflow-lint:
+    name: Workflow lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Lint GitHub Actions workflows
+        uses: raven-actions/actionlint@v2.1.2
+
+  checks:
+    name: Rust checks (MSRV)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Check default features
-        run: cargo check --all-targets --locked
-      - name: Check no default features
-        run: cargo check --no-default-features --all-targets --locked
-      - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: Unit and binary tests
-        run: cargo test --lib --bins --locked
-      - name: Doctests
-        run: cargo test --doc --locked
-      - name: Package
-        run: cargo package --locked
 
-  runtime-smoke:
-    name: Embedded Postgres smoke
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/tauri-sqlx-vanilla/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/tauri-sqlx-vanilla/src-tauri -> target
+
+      - name: Install prek
+        uses: taiki-e/install-action@v2
+        with:
+          tool: prek@${{ env.PREK_VERSION }}
+
+      - name: Validate package checks
+        run: scripts/validate.sh ci
+
+      - name: Validate publish dry run
+        run: scripts/validate.sh release
+
+  feature-powerset:
+    name: Feature powerset
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92
+
       - uses: Swatinem/rust-cache@v2
-      - name: Runtime smoke
-        run: cargo test --test runtime_smoke --locked -- --nocapture
-      - name: Proxy smoke
-        run: cargo test --test proxy_smoke --locked -- --nocapture
-      - name: Client compatibility
-        run: cargo test --test client_compat --locked -- --nocapture
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      - name: Check feature combinations
+        run: cargo hack check --feature-powerset --no-dev-deps
+
+  semver:
+    name: Public API compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check semver compatibility
+        uses: obi1kenobi/cargo-semver-checks-action@v2
 
   supply-chain:
     name: Supply chain
@@ -66,4 +130,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  required:
+    name: Required checks
+    if: always()
+    needs:
+      - workflow-lint
+      - checks
+      - feature-powerset
+      - semver
+      - supply-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any required job did not pass
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1
+
+      - name: All required jobs passed
+        run: echo "All required CI jobs passed."

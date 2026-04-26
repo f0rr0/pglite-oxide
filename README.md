@@ -3,6 +3,8 @@
 [![CI](https://github.com/f0rr0/pglite-oxide/actions/workflows/ci.yml/badge.svg)](https://github.com/f0rr0/pglite-oxide/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/pglite-oxide.svg)](https://crates.io/crates/pglite-oxide)
 [![docs.rs](https://docs.rs/pglite-oxide/badge.svg)](https://docs.rs/pglite-oxide)
+[![MSRV](https://img.shields.io/badge/msrv-1.92-blue)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0%20AND%20PostgreSQL-blue)](https://github.com/f0rr0/pglite-oxide#license)
 
 `pglite-oxide` embeds the [Electric SQL PGlite](https://github.com/electric-sql/pglite)
 WASI PostgreSQL runtime in Rust. It gives Rust apps a local Postgres-compatible
@@ -24,9 +26,8 @@ Wasmtime 44.
 cargo add pglite-oxide serde_json
 ```
 
-The default `runtime-cache` feature enables Wasmtime's persistent compiled
-module cache. Disable default features only if your app cannot write to the
-global Wasmtime cache.
+The default path uses the bundled PGDATA template and compiled Wasmtime module
+cache. There are no startup flags to remember for ordinary apps.
 
 ## Direct Embedded API
 
@@ -91,9 +92,8 @@ For app persistence, use `PgliteServer::builder().path("./.pglite").start()?`.
 ## Current Shape
 
 `pglite-oxide` is a Wasmtime/WASI embedding of PGlite, not native `libpglite`
-bindings. The first process start can spend time compiling the large WASM
-module; later starts reuse Wasmtime cache state when the default feature is
-enabled.
+bindings. Fresh databases are created from the bundled PGDATA template, and
+later process starts reuse the compiled module cache when possible.
 
 Prefer the direct `Pglite` API when you do not need a PostgreSQL connection
 string. Use `PgliteServer` for compatibility with existing Postgres client
@@ -104,6 +104,7 @@ crates.
 - [Usage guide](https://github.com/f0rr0/pglite-oxide/blob/main/docs/USAGE.md)
 - [Runtime and performance notes](https://github.com/f0rr0/pglite-oxide/blob/main/docs/RUNTIME.md)
 - [Tauri usage](https://github.com/f0rr0/pglite-oxide/blob/main/docs/TAURI.md)
+- [Tauri SQLx profiler example](https://github.com/f0rr0/pglite-oxide/blob/main/examples/tauri-sqlx-vanilla)
 - [Development guide](https://github.com/f0rr0/pglite-oxide/blob/main/docs/DEVELOPMENT.md)
 - [Runtime asset provenance](https://github.com/f0rr0/pglite-oxide/blob/main/docs/ASSETS.md)
 - [Release process](https://github.com/f0rr0/pglite-oxide/blob/main/docs/RELEASE.md)

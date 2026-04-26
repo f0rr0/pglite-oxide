@@ -46,6 +46,12 @@ intent check treats these paths as release-affecting: `Cargo.toml`, `Cargo.lock`
 4. Run `Release` from `main` with `publish-dry-run`.
 5. If the dry run passes, run `Release` again with `publish`.
 
+The manual publish job uses `release_always = true` because the workflow is not
+triggered on every merge; it only runs when a maintainer explicitly selects a
+publish operation. The job fails if release-plz reports that it created no
+release, so a green publish run means a crate/GitHub release was actually
+produced.
+
 release-plz publishes unpublished package versions to crates.io, creates the bare
 SemVer tag such as `0.2.0`, and creates the GitHub release from the generated
 changelog. Bare SemVer tags intentionally match the existing `0.1.0` tag.

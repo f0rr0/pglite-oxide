@@ -26,7 +26,7 @@ const MAX_FRONTEND_MESSAGE: usize = 64 * 1024 * 1024;
 ///
 /// The proxy intentionally runs each accepted connection on one blocking thread
 /// and does not call Wasmtime from an async runtime. That avoids the nested
-/// runtime panic that affected the old Tokio-based example.
+/// runtime panic that can happen when an async wrapper blocks inside Wasmtime.
 #[derive(Debug, Clone)]
 pub struct PgliteProxy {
     root: Arc<PathBuf>,

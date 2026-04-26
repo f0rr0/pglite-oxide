@@ -1,0 +1,41 @@
+minimum_prek_version = "0.3.10"
+default_install_hook_types = ["pre-commit", "commit-msg", "pre-push"]
+fail_fast = true
+exclude = { glob = [
+  "target/**",
+  "examples/tauri-sqlx-vanilla/node_modules/**",
+  "examples/tauri-sqlx-vanilla/dist/**",
+  "examples/tauri-sqlx-vanilla/src-tauri/target/**",
+] }
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], stages = ["pre-commit"], types = ["text"] },
+  { id = "end-of-file-fixer", stages = ["pre-commit"], types = ["text"] },
+  { id = "check-toml", stages = ["pre-commit"] },
+  { id = "check-yaml", stages = ["pre-commit"] },
+  { id = "check-json", stages = ["pre-commit"], exclude = "(^|/)tsconfig\\.json$" },
+  { id = "check-merge-conflict", stages = ["pre-commit"] },
+  { id = "check-case-conflict", stages = ["pre-commit"] },
+  { id = "check-illegal-windows-names", stages = ["pre-commit"] },
+  { id = "detect-private-key", stages = ["pre-commit"], types = ["text"] },
+  { id = "check-added-large-files", args = ["--maxkb=15000"], stages = ["pre-commit"] },
+]
+
+[[repos]]
+repo = "https://github.com/crate-ci/committed"
+rev = "v1.1.11"
+hooks = [
+  { id = "committed", args = ["--fixup", "--commit-file"], stages = ["commit-msg"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "cargo-fmt", name = "cargo fmt", language = "system", entry = "cargo fmt --check", pass_filenames = false, files = "\\.(rs|toml)$", stages = ["pre-commit"] },
+  { id = "tauri-cargo-fmt", name = "Tauri cargo fmt", language = "system", entry = "cargo fmt --manifest-path examples/tauri-sqlx-vanilla/src-tauri/Cargo.toml --check", pass_filenames = false, files = "^examples/tauri-sqlx-vanilla/src-tauri/.*\\.(rs|toml)$", stages = ["pre-commit"] },
+  { id = "git-diff-check", name = "git diff --check", language = "system", entry = "git diff --check", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+  { id = "cargo-clippy", name = "cargo clippy", language = "system", entry = "cargo clippy --all-targets --locked -- -D warnings", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+  { id = "cargo-test", name = "cargo test --all-targets", language = "system", entry = "cargo test --all-targets --locked -- --nocapture", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+]

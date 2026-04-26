@@ -7,7 +7,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.0](https://github.com/f0rr0/pglite-oxide/compare/0.1.0...0.2.0) - 2026-04-24
+## [0.2.0] - 2026-04-24
 
 ### Added
 
@@ -27,5 +27,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial repository release.
 
-[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/f0rr0/pglite-oxide/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/f0rr0/pglite-oxide/releases/tag/0.1.0

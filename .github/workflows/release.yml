@@ -25,10 +25,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  PREK_VERSION: 0.3.10
 
 jobs:
   prepare-release-pr:
-    name: Prepare release PR
+    name: Prepare Release PR
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: ${{ github.repository == 'f0rr0/pglite-oxide' && inputs.operation == 'prepare-release-pr' }}
@@ -59,9 +60,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    name: Publish release
+    name: Publish Release
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     if: ${{ github.repository == 'f0rr0/pglite-oxide' && inputs.operation != 'prepare-release-pr' }}
     environment: ${{ inputs.operation == 'publish' && 'crates-io' || 'release-dry-run' }}
     steps:
@@ -78,46 +79,49 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92
           components: rustfmt, clippy
 
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/tauri-sqlx-vanilla/package-lock.json
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/tauri-sqlx-vanilla/src-tauri -> target
 
-      - name: Format
-        run: cargo fmt --all --check
+      - name: Install prek
+        uses: taiki-e/install-action@v2
+        with:
+          tool: prek@${{ env.PREK_VERSION }}
 
-      - name: Check default features
-        run: cargo check --all-targets --locked
+      - name: Validate package checks
+        run: scripts/validate.sh ci
 
-      - name: Check no default features
-        run: cargo check --no-default-features --all-targets --locked
-
-      - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Unit and binary tests
-        run: cargo test --lib --bins --locked
-
-      - name: Doctests
-        run: cargo test --doc --locked
-
-      - name: Runtime smoke
-        run: cargo test --test runtime_smoke --locked -- --nocapture
-
-      - name: Proxy smoke
-        run: cargo test --test proxy_smoke --locked -- --nocapture
-
-      - name: Client compatibility
-        run: cargo test --test client_compat --locked -- --nocapture
+      - name: Validate publish dry run
+        run: scripts/validate.sh release
 
       - name: Supply-chain policy
         uses: EmbarkStudios/cargo-deny-action@v2
-
-      - name: Inspect package contents
-        run: cargo package --locked --list
 
       - name: Run release-plz dry run
         if: ${{ inputs.operation == 'publish-dry-run' }}

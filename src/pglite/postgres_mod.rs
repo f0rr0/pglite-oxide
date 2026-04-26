@@ -1,11 +1,10 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
+use directories::ProjectDirs;
 use getrandom::fill as fill_random;
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use tracing::warn;
 use wasmtime::OptLevel;
@@ -19,6 +18,8 @@ use super::base::PglitePaths;
 
 const WASM_PREFIX: &str = "/tmp/pglite";
 const PGDATA_DIR: &str = "/tmp/pglite/base";
+const WASMTIME_CACHE_VERSION: &str = "wasmtime-44";
+const WASMTIME_CONFIG_ID: &str = "opt-none-wasi-p1-v1";
 
 pub struct PostgresMod {
     _engine: Engine,
@@ -44,14 +45,8 @@ struct State {
 }
 
 static ENGINE: LazyLock<Engine> = LazyLock::new(build_engine);
-static MODULE_CACHE: LazyLock<Mutex<HashMap<ModuleCacheKey, Module>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct ModuleCacheKey {
-    len: usize,
-    hash: u64,
-}
+static MODULE_CACHE: LazyLock<Mutex<std::collections::HashMap<String, Module>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 fn with_wasmtime_context<T>(
     result: std::result::Result<T, wasmtime::Error>,
@@ -78,13 +73,12 @@ fn build_engine() -> Engine {
     Engine::new(&config).expect("failed to create Wasmtime engine")
 }
 
-fn module_cache_key(bytes: &[u8]) -> ModuleCacheKey {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    ModuleCacheKey {
-        len: bytes.len(),
-        hash: hasher.finish(),
-    }
+fn module_cache_key(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let wasm_sha256 = format!("{:x}", hasher.finalize());
+    let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    format!("{WASMTIME_CACHE_VERSION}-{target}-{WASMTIME_CONFIG_ID}-{wasm_sha256}")
 }
 
 fn load_module(module_path: &Path) -> Result<(Engine, Module)> {
@@ -102,16 +96,107 @@ fn load_module(module_path: &Path) -> Result<(Engine, Module)> {
         return Ok((engine, module));
     }
 
-    let module = with_wasmtime_context(
-        Module::from_binary(&engine, &bytes),
-        format!("failed to compile {}", module_path.display()),
-    )?;
+    let module = match load_serialized_module(&engine, &key) {
+        Ok(Some(module)) => module,
+        Ok(None) => compile_and_cache_module(&engine, module_path, &bytes, &key)?,
+        Err(err) => {
+            warn!("failed to read compiled module cache: {err:#}");
+            compile_module(&engine, module_path, &bytes)?
+        }
+    };
     MODULE_CACHE
         .lock()
         .map_err(|err| anyhow!("module cache lock poisoned: {err}"))?
         .insert(key, module.clone());
 
     Ok((engine, module))
+}
+
+fn load_serialized_module(engine: &Engine, key: &str) -> Result<Option<Module>> {
+    let Some(cache_path) = serialized_module_cache_path(key) else {
+        return Ok(None);
+    };
+    if !cache_path.exists() {
+        return Ok(None);
+    }
+
+    match deserialize_trusted_module_cache_file(engine, &cache_path) {
+        Ok(module) => Ok(Some(module)),
+        Err(err) => {
+            warn!(
+                "ignoring invalid compiled module cache {}: {err}",
+                cache_path.display()
+            );
+            let _ = fs::remove_file(&cache_path);
+            Ok(None)
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn deserialize_trusted_module_cache_file(
+    engine: &Engine,
+    cache_path: &Path,
+) -> wasmtime::Result<Module> {
+    // SAFETY: Wasmtime compiled modules are only deserialized from this crate's
+    // private cache directory, and the file name is keyed by the runtime WASM
+    // SHA-256, Wasmtime major version, target, and config id. Corrupt or stale
+    // files are discarded and rebuilt by the caller.
+    unsafe { Module::deserialize_file(engine, cache_path) }
+}
+
+fn compile_and_cache_module(
+    engine: &Engine,
+    module_path: &Path,
+    bytes: &[u8],
+    key: &str,
+) -> Result<Module> {
+    let module = compile_module(engine, module_path, bytes)?;
+    let Some(cache_path) = serialized_module_cache_path(key) else {
+        return Ok(module);
+    };
+
+    if let Err(err) = write_serialized_module(&module, &cache_path) {
+        warn!(
+            "failed to write compiled module cache {}: {err:#}",
+            cache_path.display()
+        );
+    }
+    Ok(module)
+}
+
+fn compile_module(engine: &Engine, module_path: &Path, bytes: &[u8]) -> Result<Module> {
+    with_wasmtime_context(
+        Module::from_binary(engine, bytes),
+        format!("failed to compile {}", module_path.display()),
+    )
+}
+
+fn serialized_module_cache_path(key: &str) -> Option<PathBuf> {
+    ProjectDirs::from("dev", "pglite-oxide", "pglite-oxide").map(|dirs| {
+        dirs.cache_dir()
+            .join("cwasm")
+            .join(format!("pglite-{key}.cwasm"))
+    })
+}
+
+fn write_serialized_module(module: &Module, cache_path: &Path) -> Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create module cache dir {}", parent.display()))?;
+    }
+    let bytes = with_wasmtime_context(module.serialize(), "serialize compiled pglite module")?;
+    let tmp_path = cache_path.with_extension("cwasm.tmp");
+    fs::write(&tmp_path, bytes)
+        .with_context(|| format!("write compiled module cache {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, cache_path).with_context(|| {
+        format!(
+            "promote compiled module cache {} -> {}",
+            tmp_path.display(),
+            cache_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 struct Exports {
@@ -127,6 +212,11 @@ struct Exports {
 }
 
 impl PostgresMod {
+    pub(crate) fn preload_module(module_path: &Path) -> Result<()> {
+        let _ = load_module(module_path)?;
+        Ok(())
+    }
+
     pub fn new(paths: PglitePaths) -> Result<Self> {
         let module_path = paths.pgroot.join("pglite/bin/pglite.wasi");
 

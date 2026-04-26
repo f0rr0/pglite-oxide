@@ -20,29 +20,29 @@ exists.
 
 ## Startup Cost
 
-The first instance in a process can take a while because Wasmtime compiles the
-large PGlite WASM module and the first temporary cluster runs `initdb`.
+The first instance in a process can take a while because Wasmtime prepares the
+large PGlite WASM module and starts the embedded backend.
 
-`pglite-oxide` reduces repeat startup cost in two ways:
+`pglite-oxide` reduces startup cost in four ways:
 
 - compiled modules are cached in process, so additional `Pglite` instances avoid
   the same compile work
+- compiled modules are serialized to a `.cwasm` cache keyed by the PGlite WASM
+  SHA-256, Wasmtime major version, target, and config id
+- fresh clusters are created from a bundled prepopulated PGDATA template before
+  the backend session starts
 - `Pglite::temporary()` clones a process-local template cluster, so later
-  temporary databases copy a prepared filesystem instead of rerunning `initdb`
+  temporary databases copy a prepared filesystem
 
 Use `Pglite::builder().fresh_temporary().open()?` only when a test specifically
 needs fresh cluster initialization.
 
 ## Persistent Compile Cache
 
-The default `runtime-cache` feature enables Wasmtime's persistent compiled module
-cache, so later processes can reuse native code for the same PGlite WASM module.
-
-Disable it if your app cannot write to the global cache location:
-
-```toml
-pglite-oxide = { version = "0.2", default-features = false }
-```
+The crate keeps Wasmtime's persistent cache feature enabled and also writes a
+crate-owned `.cwasm` cache under the platform cache directory. Cache writes are
+best effort; if the cache cannot be read or written, the module is compiled
+normally and the app continues.
 
 For fast local test loops in a downstream workspace, add the same profile
 override used by this repository. Wasmtime's debug cache otherwise keys entries

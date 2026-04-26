@@ -8,10 +8,12 @@ user-facing binary to distribute.
 ## One-time setup
 
 - Ensure the crate owner has crates.io publish rights for `pglite-oxide`.
-- `pglite-oxide@0.1.0` is already on crates.io, so future releases use crates.io
-  Trusted Publishing. Configure `f0rr0/pglite-oxide`, workflow
+- The crate already exists on crates.io. Future releases use crates.io Trusted
+  Publishing. Configure `f0rr0/pglite-oxide`, workflow
   `.github/workflows/release.yml`, and environment `crates-io` in the crates.io
   trusted publisher settings.
+- Do not configure `CARGO_REGISTRY_TOKEN`; the release workflow relies on the
+  GitHub OIDC token granted by `id-token: write`.
 - Repository Actions settings must allow GitHub Actions to create pull requests.
 - The `Release` workflow needs `contents: write`, `pull-requests: write`, and
   `id-token: write`; these are already declared in the workflow.
@@ -54,5 +56,6 @@ produced. The dry-run and publish action steps are intentionally separate so the
 real publish step omits the `dry_run` input entirely.
 
 release-plz publishes unpublished package versions to crates.io, creates the bare
-SemVer tag such as `0.2.0`, and creates the GitHub release from the generated
-changelog. Bare SemVer tags intentionally match the existing `0.1.0` tag.
+SemVer tag such as `0.3.0`, and creates the GitHub release from the generated
+changelog. Bare SemVer tags intentionally match the existing `0.1.0` and
+`0.2.0` tags.

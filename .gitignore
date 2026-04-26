@@ -3,4 +3,3 @@
 **/.DS_Store
 # Build artifacts from cargo package
 pglite_oxide-*.crates.tar.gz
-

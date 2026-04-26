@@ -51,6 +51,9 @@ fn main() -> anyhow::Result<()> {
 Use `Pglite::builder().fresh_temporary().open()?` only when a test needs to
 exercise fresh cluster initialization.
 
+Fresh persistent databases use the bundled PGDATA template by default, so app
+code does not need to opt into the fast startup path.
+
 ## Queries
 
 `exec` runs SQL without parameters. `query` runs the extended protocol with JSON

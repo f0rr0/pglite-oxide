@@ -1,6 +1,6 @@
 [package]
 name = "pglite-oxide"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Rust helpers for embedding the Electric SQL pglite WebAssembly PostgreSQL runtime"
@@ -17,12 +17,7 @@ exclude = [
   "Cargo.toml.orig",
   "assets/bin/pg_dump.wasm",
   "assets/extensions/vector.tar.gz",
-  "assets/pglite.data",
-  "assets/pglite.wasi",
-  "docs/ALIGNMENT_DIFF.md",
-  "docs/ALIGNMENT_NOTES.md",
-  "docs/RUST_PORT_PLAN.md",
-  "docs/reviews/**",
+  "examples/tauri-sqlx-vanilla/**",
   "release-plz.toml",
 ]
 
@@ -37,15 +32,14 @@ pglite-build-repo = "electric-sql/pglite-build"
 pglite-build-branch = "gh-pages"
 pglite-build-commit = "4c78ee29513799a51d4e1f75008cf9c3f00b11e9"
 pglite-npm-version-checked = "0.4.4"
-runtime-archive-sha256 = "c725235f22a4fd50fed363f4065edb151a716fa769cba66f2383b8b854e6bdb5"
-pglite-wasi-sha256 = "a72b96adcd4ce40c51dd7201ee76a90f1b5799f633753b9cbb3c9af7b79f8da5"
-pglite-data-sha256 = "791a44e2ad1d48830714fb54e8662a3372618883566a0af7fc9f6b8375ab82d1"
-pglite-fs-manifest-sha256 = "880c9c058f416aad6ddc33fe0a1c84f6213b40c2b378e32587d25167d2f346f5"
+runtime-archive-sha256 = "f6f90bf571c7f5bc925ff22f94233893c2c740466da2ad23bcd4e8e1ea8c498a"
+pglite-wasi-sha256 = "ad423e536096ede1870f4802e7dbe4b49599c6e3bafc45aa9a4ddeeae2c5f4f8"
+pgdata-template-archive-sha256 = "63e398b3cd4fec134d06539f064018fc2aa7fef75b9c331472f9b2d7385b913d"
 
 [dependencies]
 anyhow = "1"
 tar = "0.4"
-xz2 = "0.1"
+zstd = { version = "0.13", default-features = false }
 directories = "6"
 wasmtime = { version = "44", default-features = false, features = [
   "cranelift",
@@ -61,6 +55,7 @@ serde_json = "1"
 regex = "1"
 tempfile = "3"
 hex = "0.4"
+sha2 = "0.10"
 
 [dev-dependencies]
 sqlx = { version = "0.8", default-features = false, features = [
@@ -73,10 +68,6 @@ tokio-postgres = "0.7"
 [[bin]]
 name = "pglite-dump"
 path = "src/bin/pglite_dump.rs"
-
-[[bin]]
-name = "pglite-manifest-sync"
-path = "src/bin/pglite_manifest_sync.rs"
 
 [[bin]]
 name = "pglite-proxy"

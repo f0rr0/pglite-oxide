@@ -12,9 +12,10 @@ pub(crate) mod transport;
 pub(crate) mod types;
 
 pub use base::{
-    InstallOptions, InstallOutcome, MountInfo, PglitePaths, ensure_cluster, install_and_init,
-    install_and_init_in, install_default, install_extension_archive, install_extension_bytes,
-    install_into, install_with_options,
+    InstallOptions, InstallOutcome, MountInfo, PgDataTemplate, PgDataTemplateManifest, PglitePaths,
+    build_pgdata_template, ensure_cluster, install_and_init, install_and_init_in, install_default,
+    install_extension_archive, install_extension_bytes, install_into, install_with_options,
+    preload_runtime_module,
 };
 pub use builder::PgliteBuilder;
 pub use client::{GlobalListenerHandle, ListenerHandle, Pglite, Transaction};

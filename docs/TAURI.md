@@ -4,6 +4,10 @@ Use `pglite-oxide` from Rust state, not from the webview. The main value is a
 sidecar-free local Postgres runtime that your commands, background tasks, and
 Rust libraries can share.
 
+See `examples/tauri-sqlx-vanilla` for a Tauri v2 vanilla app that stores the
+runtime in managed Rust state, connects SQLx with `max_connections(1)`, and
+returns startup/query profile data as JSON.
+
 ## Direct Embedded API
 
 Use `Pglite` when your Rust code owns the database calls:
@@ -64,5 +68,7 @@ Postgres server.
 - Prefer `Pglite` over `PgliteServer` when you do not need a PostgreSQL URL.
 - Use `Pglite::temporary()` or `PgliteServer::temporary_tcp()` for tests; both
   use the template-cluster cache by default.
+- Fresh app databases use the bundled PGDATA template by default; there is no
+  Tauri-specific startup configuration required.
 - Mobile targets need separate validation. The current crate targets desktop
   Rust with Wasmtime.

@@ -7,7 +7,6 @@
 
 ## Verification
 
-- [ ] `cargo fmt --all --check`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test --doc`
-- [ ] `cargo test --test runtime_smoke -- --nocapture`
+- [ ] `scripts/validate.sh ci`
+- [ ] `scripts/validate.sh release`
+- [ ] `cargo deny check`

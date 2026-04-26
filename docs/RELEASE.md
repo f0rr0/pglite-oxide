@@ -50,7 +50,8 @@ The manual publish job uses `release_always = true` because the workflow is not
 triggered on every merge; it only runs when a maintainer explicitly selects a
 publish operation. The job fails if release-plz reports that it created no
 release, so a green publish run means a crate/GitHub release was actually
-produced.
+produced. The dry-run and publish action steps are intentionally separate so the
+real publish step omits the `dry_run` input entirely.
 
 release-plz publishes unpublished package versions to crates.io, creates the bare
 SemVer tag such as `0.2.0`, and creates the GitHub release from the generated

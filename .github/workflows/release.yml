@@ -120,9 +120,17 @@ jobs:
         run: cargo package --locked --list
 
       - name: Run release-plz
+        id: release_plz
         uses: release-plz/action@v0.5
         with:
           command: release
           dry_run: ${{ inputs.operation == 'publish-dry-run' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require release output
+        if: ${{ steps.release_plz.outputs.releases_created != 'true' }}
+        run: |
+          echo "release-plz completed without creating a release." >&2
+          echo "Check that Cargo.toml contains an unpublished version and that release-plz is allowed to release the current main commit." >&2
+          exit 1

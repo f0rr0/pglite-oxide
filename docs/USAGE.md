@@ -1,0 +1,199 @@
+# Usage Guide
+
+`pglite-oxide` has two public entry points:
+
+- `Pglite` for direct embedded calls from Rust
+- `PgliteServer` for crates that need a PostgreSQL connection URI
+
+Prefer `Pglite` unless you specifically need a Postgres wire-protocol client.
+
+## Opening Databases
+
+Persistent database under an explicit path:
+
+```rust,no_run
+use pglite_oxide::Pglite;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+    db.close()?;
+    Ok(())
+}
+```
+
+Persistent database under the platform app-data directory:
+
+```rust,no_run
+use pglite_oxide::Pglite;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::builder()
+        .app("com", "example", "desktop-app")
+        .open()?;
+    db.close()?;
+    Ok(())
+}
+```
+
+Temporary database for tests:
+
+```rust,no_run
+use pglite_oxide::Pglite;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::temporary()?;
+    db.close()?;
+    Ok(())
+}
+```
+
+`Pglite::temporary()` uses the process-local template cluster cache by default.
+Use `Pglite::builder().fresh_temporary().open()?` only when a test needs to
+exercise fresh cluster initialization.
+
+## Queries
+
+`exec` runs SQL without parameters. `query` runs the extended protocol with JSON
+parameters.
+
+```rust,no_run
+use pglite_oxide::Pglite;
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+
+    db.exec("CREATE TABLE IF NOT EXISTS items(value TEXT)", None)?;
+    db.query("INSERT INTO items(value) VALUES ($1)", &[json!("alpha")], None)?;
+
+    let result = db.query("SELECT value FROM items", &[], None)?;
+    println!("{:?}", result.rows);
+
+    db.close()?;
+    Ok(())
+}
+```
+
+Values are passed as `serde_json::Value`. Default parsers and serializers cover
+common Postgres types including integers, floats, booleans, JSON/JSONB, bytea,
+dates/timestamps, UUIDs, and arrays discovered from `pg_type`.
+
+## Query Options
+
+`QueryOptions` controls result parsing and protocol behavior.
+
+```rust,no_run
+use pglite_oxide::{Pglite, QueryOptions, RowMode};
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+    let options = QueryOptions {
+        row_mode: Some(RowMode::Array),
+        ..QueryOptions::default()
+    };
+
+    let rows = db.query("SELECT 1, 2", &[], Some(&options))?;
+    println!("{:?}", rows.rows);
+
+    db.close()?;
+    Ok(())
+}
+```
+
+For `COPY ... FROM '/dev/blob'`, set `QueryOptions::blob` to the bytes exposed
+through the guest `/dev/blob`. For `COPY ... TO '/dev/blob'`, read the returned
+`Results::blob`.
+
+## Transactions
+
+Use `transaction` when several direct calls should commit or roll back together.
+
+```rust,no_run
+use pglite_oxide::Pglite;
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+
+    db.transaction(|tx| {
+        tx.query("INSERT INTO items(value) VALUES ($1)", &[json!("alpha")], None)?;
+        tx.query("INSERT INTO items(value) VALUES ($1)", &[json!("beta")], None)?;
+        Ok(())
+    })?;
+
+    db.close()?;
+    Ok(())
+}
+```
+
+## SQL Helpers
+
+`format_query` asks Postgres to quote parameter values. `QueryTemplate` helps
+build SQL while keeping identifiers and values separate.
+
+```rust,no_run
+use pglite_oxide::{Pglite, QueryTemplate, format_query, quote_identifier};
+use serde_json::json;
+
+fn main() -> anyhow::Result<()> {
+    let mut db = Pglite::open("./.pglite")?;
+
+    let sql = format_query(&mut db, "SELECT $1::int", &[json!(42)])?;
+    assert_eq!(sql, "SELECT '42'::int");
+
+    let mut template = QueryTemplate::new();
+    template.push_sql("SELECT * FROM ");
+    template.push_identifier("items");
+    template.push_sql(" WHERE value = ");
+    template.push_param(json!("alpha"));
+    let built = template.build();
+
+    assert_eq!(built.query, "SELECT * FROM \"items\" WHERE value = $1");
+    assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
+
+    db.close()?;
+    Ok(())
+}
+```
+
+## PostgreSQL Clients
+
+Use `PgliteServer` when another crate expects a PostgreSQL URL. The server owns
+one embedded backend, so configure downstream pools with one connection.
+
+```rust,no_run
+use pglite_oxide::PgliteServer;
+use sqlx::{Connection, Row};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let server = PgliteServer::temporary_tcp()?;
+    let mut conn = sqlx::PgConnection::connect(&server.connection_uri()).await?;
+
+    let row = sqlx::query("SELECT $1::int4 + 1 AS answer")
+        .bind(41_i32)
+        .fetch_one(&mut conn)
+        .await?;
+    assert_eq!(row.try_get::<i32, _>("answer")?, 42);
+
+    conn.close().await?;
+    server.shutdown()?;
+    Ok(())
+}
+```
+
+For app persistence, use:
+
+```rust,no_run
+use pglite_oxide::PgliteServer;
+
+fn main() -> anyhow::Result<()> {
+    let server = PgliteServer::builder()
+        .path("./.pglite")
+        .start()?;
+    server.shutdown()?;
+    Ok(())
+}
+```
+
+Connection URIs generated by the crate include `sslmode=disable`.

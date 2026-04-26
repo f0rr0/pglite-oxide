@@ -11,7 +11,6 @@ documentation = "https://docs.rs/pglite-oxide"
 keywords = ["postgres", "pglite", "wasm", "database", "embedded"]
 categories = ["database-implementations", "wasm", "development-tools::testing"]
 license = "MIT AND Apache-2.0 AND PostgreSQL"
-publish = ["crates-io"]
 exclude = [
   ".config/**",
   ".github/**",

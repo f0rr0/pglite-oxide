@@ -11,19 +11,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- Default runtime startup now uses the optimized embedded-template path.
+- optimize startup and add Tauri SQLx profiler ([#9](https://github.com/f0rr0/pglite-oxide/pull/9))
+
+- `PgliteRuntimeOptions::default` now selects the optimized embedded-template
+  startup path.
 - `ensure_cluster` now requires runtime options.
 - Runtime packaging now uses the uncompressed `pglite-wasi.tar` asset.
 
 ### Added
 
-- Added reusable Wasmtime engine/module caching and on-disk compiled `.cwasm`
-  cache support for faster startup.
-- Added an embedded prepopulated PGDATA template with manifest validation.
-- Added a vanilla Tauri v2 SQLx profiler example with release-mode workload
-  reporting.
-- Added repo hooks for Conventional Commit validation, formatting, and pre-push
-  checks.
+- Reusable Wasmtime engine/module caching and on-disk compiled `.cwasm` cache
+  support for faster startup.
+- Embedded prepopulated PGDATA template with manifest validation.
+- Vanilla Tauri v2 SQLx profiler example with release-mode workload reporting.
+- Repo hooks for Conventional Commit validation, formatting, and pre-push checks.
 
 ### Changed
 
@@ -52,7 +53,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Improved the blocking proxy/server path for extended-protocol clients,
   readiness handling, and socket mode behavior.
 
-## [0.1.0] - 2026-04-24
+## [0.1.0] - 2025-09-27
 
 - Initial repository release.
 

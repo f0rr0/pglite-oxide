@@ -114,6 +114,9 @@ jobs:
         with:
           tool: prek@${{ env.PREK_VERSION }}
 
+      - name: Validate release changelog
+        run: .github/scripts/check-release-changelog.sh
+
       - name: Validate package checks
         run: scripts/validate.sh ci
 

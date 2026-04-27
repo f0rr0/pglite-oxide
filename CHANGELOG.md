@@ -7,6 +7,35 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-26
+
+### Breaking
+
+- Default runtime startup now uses the optimized embedded-template path.
+- `ensure_cluster` now requires runtime options.
+- Runtime packaging now uses the uncompressed `pglite-wasi.tar` asset.
+
+### Added
+
+- Added reusable Wasmtime engine/module caching and on-disk compiled `.cwasm`
+  cache support for faster startup.
+- Added an embedded prepopulated PGDATA template with manifest validation.
+- Added a vanilla Tauri v2 SQLx profiler example with release-mode workload
+  reporting.
+- Added repo hooks for Conventional Commit validation, formatting, and pre-push
+  checks.
+
+### Changed
+
+- Quieted WASI stdio by default and prefer Unix sockets where available.
+- Streamlined runtime, release, contributing, and usage docs around the optimized
+  default path.
+
+### Fixed
+
+- Hardened proxy frontend framing for SSL requests, cancel requests,
+  split/coalesced packets, and extended-query batching.
+
 ## [0.2.0] - 2026-04-24
 
 ### Added
@@ -27,6 +56,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial repository release.
 
-[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/f0rr0/pglite-oxide/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/f0rr0/pglite-oxide/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/f0rr0/pglite-oxide/releases/tag/0.1.0

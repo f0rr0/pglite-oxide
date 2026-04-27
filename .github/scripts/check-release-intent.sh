@@ -16,6 +16,57 @@ release_pr_pattern='^chore\(release\): .+'
 
 affected_files=()
 
+is_release_pr=false
+if [[ "${subject}" =~ ${release_pr_pattern} && "${head_branch}" == release-plz-* ]]; then
+  is_release_pr=true
+fi
+
+package_version_from_ref() {
+  local ref="${1:?package_version_from_ref requires a git ref}"
+
+  git show "${ref}:Cargo.toml" | awk '
+    /^\[package\][[:space:]]*$/ {
+      in_package = 1
+      next
+    }
+    /^\[/ && in_package {
+      exit
+    }
+    in_package && $0 ~ /^[[:space:]]*version[[:space:]]*=/ {
+      line = $0
+      sub(/^[^=]*=[[:space:]]*"/, "", line)
+      sub(/".*$/, "", line)
+      print line
+      exit
+    }
+  '
+}
+
+base_version="$(package_version_from_ref "${base_ref}")"
+head_version="$(package_version_from_ref "${head_ref}")"
+
+if [[ -z "${base_version}" || -z "${head_version}" ]]; then
+  echo "could not read package version from Cargo.toml" >&2
+  exit 1
+fi
+
+if [[ "${base_version}" != "${head_version}" && "${is_release_pr}" != true ]]; then
+  cat >&2 <<EOF
+This PR changes the root package version from ${base_version} to ${head_version}.
+
+Package version bumps are release-plz owned. Run the Release workflow with
+prepare-release-pr and merge the generated release-plz PR instead of changing
+the version in a feature/fix PR.
+
+release-plz PRs are allowed only when their branch starts with release-plz- and
+their title starts with chore(release):.
+
+Received:
+  ${subject}
+EOF
+  exit 1
+fi
+
 while IFS= read -r file; do
   [[ -z "${file}" ]] && continue
 
@@ -34,7 +85,7 @@ if [[ "${subject}" =~ ${release_pattern} ]]; then
   exit 0
 fi
 
-if [[ "${subject}" =~ ${release_pr_pattern} && "${head_branch}" == release-plz-* ]]; then
+if [[ "${is_release_pr}" == true ]]; then
   exit 0
 fi
 

@@ -38,6 +38,11 @@ types such as `docs:`, `ci:`, `chore:`, `style:`, or `test:`. The CI release
 intent check treats these paths as release-affecting: `Cargo.toml`, `Cargo.lock`,
 `build.rs`, `src/**`, `assets/**`, `examples/**`, and `benches/**`.
 
+Package version bumps are release-plz owned. Feature and fix PRs may change
+package code, dependencies, and assets, but they must not change the root
+`Cargo.toml` package version. The version bump and matching `CHANGELOG.md`
+section must come from a `release-plz-*` PR titled `chore(release): ...`.
+
 ## Releasing from main
 
 1. Merge release-worthy work to `main`.
@@ -54,6 +59,13 @@ publish operation. The job fails if release-plz reports that it created no
 release, so a green publish run means a crate/GitHub release was actually
 produced. The dry-run and publish action steps are intentionally separate so the
 real publish step omits the `dry_run` input entirely.
+
+The publish job also validates release-note readiness before running expensive
+package checks. The current root package version must be the first release
+section in `CHANGELOG.md`, that section must contain release-note body content,
+and the `[Unreleased]` compare link must start at that version. If this check
+fails, run `prepare-release-pr` and merge the generated release-plz PR before
+publishing.
 
 release-plz publishes unpublished package versions to crates.io, creates the bare
 SemVer tag such as `0.3.0`, and creates the GitHub release from the generated

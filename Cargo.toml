@@ -12,7 +12,6 @@ keywords = ["postgres", "pglite", "wasm", "database", "embedded"]
 categories = ["database-implementations", "wasm", "development-tools::testing"]
 license = "MIT AND Apache-2.0 AND PostgreSQL"
 exclude = [
-  ".config/**",
   ".github/**",
   "Cargo.toml.orig",
   "assets/bin/pg_dump.wasm",

@@ -89,16 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For app persistence, use `PgliteServer::builder().path("./.pglite").start()?`.
 
-## Current Shape
-
-`pglite-oxide` is a Wasmtime/WASI embedding of PGlite, not native `libpglite`
-bindings. Fresh databases are created from the bundled PGDATA template, and
-later process starts reuse the compiled module cache when possible.
-
-Prefer the direct `Pglite` API when you do not need a PostgreSQL connection
-string. Use `PgliteServer` for compatibility with existing Postgres client
-crates.
-
 ## Docs
 
 - [Usage guide](https://github.com/f0rr0/pglite-oxide/blob/main/docs/USAGE.md)

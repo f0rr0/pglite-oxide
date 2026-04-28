@@ -42,18 +42,18 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.92
 
       - name: Create or update release PR
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11
         with:
           command: release-pr
         env:
@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -91,28 +91,28 @@ jobs:
             pkg-config
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.92
           components: rustfmt, clippy
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: examples/tauri-sqlx-vanilla/package-lock.json
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
             . -> target
             examples/tauri-sqlx-vanilla/src-tauri -> target
 
       - name: Install prek
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@1f2425cdb59f8fffb99ee16a5968edf6f57a2b93
         with:
-          tool: prek@${{ env.PREK_VERSION }}
+          tool: prek@${{ env.PREK_VERSION }},cargo-nextest
 
       - name: Validate release changelog
         run: .github/scripts/check-release-changelog.sh
@@ -124,11 +124,11 @@ jobs:
         run: scripts/validate.sh release
 
       - name: Supply-chain policy
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb
 
       - name: Run release-plz dry run
         if: ${{ inputs.operation == 'publish-dry-run' }}
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11
         with:
           command: release
           dry_run: true
@@ -138,7 +138,7 @@ jobs:
       - name: Run release-plz publish
         if: ${{ inputs.operation == 'publish' }}
         id: release_plz_publish
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11
         with:
           command: release
         env:

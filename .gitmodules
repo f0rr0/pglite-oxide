@@ -1,0 +1,18 @@
+[submodule "assets/checkouts/pglite-build"]
+	path = assets/checkouts/pglite-build
+	url = https://github.com/electric-sql/pglite-build
+	branch = portable
+[submodule "assets/checkouts/postgres-pglite"]
+	path = assets/checkouts/postgres-pglite
+	url = https://github.com/electric-sql/postgres-pglite
+	branch = REL_17_5_WASM-pglite-builder
+[submodule "assets/checkouts/pglite"]
+	path = assets/checkouts/pglite
+	url = https://github.com/electric-sql/pglite.git
+	branch = main
+[submodule "assets/checkouts/pgvector"]
+	path = assets/checkouts/pgvector
+	url = https://github.com/pgvector/pgvector.git
+[submodule "assets/checkouts/pglite-bindings"]
+	path = assets/checkouts/pglite-bindings
+	url = https://github.com/electric-sql/pglite-bindings

@@ -3,14 +3,21 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use tempfile::TempDir;
 
-use crate::pglite::base::{install_default, install_into, install_temporary_from_template};
+use crate::pglite::base::{
+    PglitePaths, RootLock, install_into_without_template, install_paths,
+    install_paths_without_template, install_temporary_from_template,
+};
 use crate::pglite::client::Pglite;
+#[cfg(feature = "extensions")]
+use crate::pglite::extensions::Extension;
 
 /// Builder for opening persistent or temporary [`Pglite`] databases.
 #[derive(Debug, Clone)]
 pub struct PgliteBuilder {
     target: Option<PgliteTarget>,
     template_cache: bool,
+    #[cfg(feature = "extensions")]
+    extensions: Vec<Extension>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +36,8 @@ impl Default for PgliteBuilder {
         Self {
             target: None,
             template_cache: true,
+            #[cfg(feature = "extensions")]
+            extensions: Vec::new(),
         }
     }
 }
@@ -75,8 +84,8 @@ impl PgliteBuilder {
         self
     }
 
-    /// Control whether temporary databases are cloned from the process-local
-    /// template cluster cache.
+    /// Control whether new databases are cloned from the process-local or
+    /// embedded PGDATA template cache.
     pub fn template_cache(mut self, enabled: bool) -> Self {
         self.template_cache = enabled;
         self
@@ -87,20 +96,46 @@ impl PgliteBuilder {
         self.temporary().template_cache(false)
     }
 
+    /// Enable a bundled Postgres extension before returning the database.
+    #[cfg(feature = "extensions")]
+    pub fn extension(mut self, extension: Extension) -> Self {
+        self.extensions.push(extension);
+        self
+    }
+
+    /// Enable bundled Postgres extensions before returning the database.
+    #[cfg(feature = "extensions")]
+    pub fn extensions(mut self, extensions: impl IntoIterator<Item = Extension>) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
     /// Install, initialize, and start the selected database.
     pub fn open(self) -> Result<Pglite> {
-        match self.target {
+        match self.target.clone() {
             Some(PgliteTarget::Path(root)) => {
-                let outcome = install_into(&root)?;
-                Pglite::new(outcome.paths)
+                let paths = PglitePaths::with_root(&root);
+                let lock = RootLock::acquire(&root)?;
+                let outcome = if self.template_cache {
+                    install_paths(paths)?
+                } else {
+                    install_paths_without_template(paths)?
+                };
+                self.open_paths(outcome.paths, Some(lock))
             }
             Some(PgliteTarget::AppId {
                 qualifier,
                 organization,
                 application,
             }) => {
-                let outcome = install_default((&qualifier, &organization, &application))?;
-                Pglite::new(outcome.paths)
+                let paths = PglitePaths::new((&qualifier, &organization, &application))?;
+                let lock = RootLock::acquire_for_paths(&paths)?;
+                let outcome = if self.template_cache {
+                    install_paths(paths)?
+                } else {
+                    install_paths_without_template(paths)?
+                };
+                self.open_paths(outcome.paths, Some(lock))
             }
             Some(PgliteTarget::Temporary) => self.open_temporary(),
             None => {
@@ -116,12 +151,26 @@ impl PgliteBuilder {
             install_temporary_from_template()?
         } else {
             let temp_dir = TempDir::new()?;
-            let outcome = install_into(temp_dir.path())?;
+            let outcome = install_into_without_template(temp_dir.path())?;
             (temp_dir, outcome)
         };
 
-        let mut instance = Pglite::new(outcome.paths)?;
+        let mut instance = self.open_paths(outcome.paths, None)?;
         instance.attach_temp_dir(temp_dir);
+        Ok(instance)
+    }
+
+    fn open_paths(self, paths: PglitePaths, root_lock: Option<RootLock>) -> Result<Pglite> {
+        let mut instance = Pglite::new(paths)?;
+        if let Some(lock) = root_lock {
+            instance.attach_root_lock(lock);
+        }
+        #[cfg(feature = "extensions")]
+        let mut instance = instance;
+        #[cfg(feature = "extensions")]
+        for extension in self.extensions {
+            instance.enable_extension(extension)?;
+        }
         Ok(instance)
     }
 }

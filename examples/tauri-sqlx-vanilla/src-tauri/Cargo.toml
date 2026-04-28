@@ -6,6 +6,8 @@ authors = ["pglite-oxide contributors"]
 edition = "2021"
 publish = false
 
+[workspace]
+
 [lib]
 name = "tauri_sqlx_vanilla_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

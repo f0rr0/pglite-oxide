@@ -1,0 +1,24 @@
+[package]
+name = "pglite-oxide-assets"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Internal PGlite runtime and extension assets for pglite-oxide"
+repository = "https://github.com/f0rr0/pglite-oxide"
+homepage = "https://github.com/f0rr0/pglite-oxide"
+documentation = "https://docs.rs/pglite-oxide-assets"
+license = "MIT AND Apache-2.0 AND PostgreSQL"
+publish = true
+include = [
+  "Cargo.toml",
+  "README.md",
+  "src/**",
+  "assets/**",
+]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

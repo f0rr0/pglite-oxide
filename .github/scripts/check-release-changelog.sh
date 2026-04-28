@@ -99,7 +99,7 @@ EOF
   exit 1
 fi
 
-expected_unreleased="[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/${package_version}...HEAD"
+expected_unreleased="[Unreleased]: https://github.com/f0rr0/pglite-oxide/compare/pglite-oxide-v${package_version}...HEAD"
 
 if ! grep -Fxq "${expected_unreleased}" CHANGELOG.md; then
   cat >&2 <<EOF

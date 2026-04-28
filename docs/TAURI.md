@@ -71,4 +71,4 @@ Postgres server.
 - Fresh app databases use the bundled PGDATA template by default; there is no
   Tauri-specific startup configuration required.
 - Mobile targets need separate validation. The current crate targets desktop
-  Rust with Wasmtime.
+  Rust with Wasmer/WASIX.

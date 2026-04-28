@@ -31,7 +31,8 @@ slower than the protocol unit tests.
 
 The repository includes maintenance commands:
 
-- `pglite-dump` expands the bundled runtime archive for inspection.
+- `pglite-dump` is reserved for the real WASIX `pg_dump` runner. It should not
+  expose public dump behavior until dump/restore tests pass.
 - `pglite-proxy` exposes a local PostgreSQL socket backed by the embedded
   runtime.
 - `cargo run --example build_pgdata_template` regenerates the bundled

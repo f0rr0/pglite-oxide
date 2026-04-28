@@ -1,6 +1,6 @@
 # pglite SQLx Tauri profile
 
-This is a vanilla TypeScript Tauri v2 app that exercises `pglite-oxide` through a real `sqlx::PgPool`. It uses the crate defaults: bundled PGDATA template, compiled Wasmtime module cache, quiet WASI stdio, and the preferred local proxy.
+This is a vanilla TypeScript Tauri v2 app that exercises `pglite-oxide` through a real `sqlx::PgPool`. It uses the crate defaults: bundled PGDATA template, Wasmer/WASIX AOT artifact loading, quiet runtime stdio, and the preferred local proxy.
 
 ## Run the desktop app
 
@@ -28,7 +28,7 @@ The profiler uses the optimized default path. Flags:
 ## What is measured
 
 - Runtime archive install/reuse.
-- Wasmtime module load, compile, or compiled-cache reuse.
+- Wasmer module load, AOT artifact install, and runtime-cache reuse.
 - PostgreSQL cluster creation, bundled template install, or reuse.
 - Preferred proxy startup: Unix socket on macOS/Linux when possible, TCP fallback otherwise.
 - SQLx pool connection, including the first backend wire-protocol handshake.

@@ -3,7 +3,7 @@ name = "pglite-oxide"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.92"
-description = "Rust helpers for embedding the Electric SQL pglite WebAssembly PostgreSQL runtime"
+description = "Embedded Postgres for Rust tests and local apps. No Docker, works with SQLx and any Postgres client."
 readme = "README.md"
 repository = "https://github.com/f0rr0/pglite-oxide"
 homepage = "https://github.com/f0rr0/pglite-oxide"
@@ -14,39 +14,59 @@ license = "MIT AND Apache-2.0 AND PostgreSQL"
 exclude = [
   ".github/**",
   "Cargo.toml.orig",
-  "assets/bin/pg_dump.wasm",
-  "assets/extensions/vector.tar.gz",
+  "assets/checkouts/**",
+  "assets/wasix-build/build/**",
+  "assets/wasix-build/work/**",
+  "crates/**",
   "examples/tauri-sqlx-vanilla/**",
   "release-plz.toml",
+  "spikes/**",
+  "xtask/**",
 ]
 
+[workspace]
+members = [
+  ".",
+  "crates/assets",
+  "crates/aot/aarch64-apple-darwin",
+  "crates/aot/x86_64-apple-darwin",
+  "crates/aot/x86_64-unknown-linux-gnu",
+  "crates/aot/aarch64-unknown-linux-gnu",
+  "crates/aot/x86_64-pc-windows-msvc",
+  "xtask",
+]
+exclude = ["examples/tauri-sqlx-vanilla/src-tauri"]
+resolver = "3"
+
 [features]
-default = ["runtime-cache"]
-runtime-cache = ["wasmtime/cache"]
+default = ["runtime-cache", "extensions"]
+runtime-cache = []
+extensions = [
+  "dep:pglite-oxide-assets",
+  "dep:pglite-oxide-aot-aarch64-apple-darwin",
+  "dep:pglite-oxide-aot-x86_64-apple-darwin",
+  "dep:pglite-oxide-aot-x86_64-unknown-linux-gnu",
+  "dep:pglite-oxide-aot-aarch64-unknown-linux-gnu",
+  "dep:pglite-oxide-aot-x86_64-pc-windows-msvc",
+]
 
 [package.metadata.pglite-oxide.assets]
 postgres-version = "17.5"
-postgres-pglite-branch = "REL_17_5-pglite"
+postgres-pglite-branch = "REL_17_5_WASM-pglite-builder"
 pglite-build-repo = "electric-sql/pglite-build"
-pglite-build-branch = "gh-pages"
-pglite-build-commit = "4c78ee29513799a51d4e1f75008cf9c3f00b11e9"
+pglite-build-branch = "portable"
+pglite-build-commit = "c195113dbaf09488f8d5eeb2db91dacd123b74d0"
 pglite-npm-version-checked = "0.4.4"
-runtime-archive-sha256 = "f6f90bf571c7f5bc925ff22f94233893c2c740466da2ad23bcd4e8e1ea8c498a"
-pglite-wasi-sha256 = "ad423e536096ede1870f4802e7dbe4b49599c6e3bafc45aa9a4ddeeae2c5f4f8"
-pgdata-template-archive-sha256 = "63e398b3cd4fec134d06539f064018fc2aa7fef75b9c331472f9b2d7385b913d"
+runtime-archive-sha256 = "acb15508381101bcb5a25ef58d7150b2aa4fc6c4f79da2329e6876a7f1db2265"
+pglite-wasix-sha256 = "8043b5b330722c02ef4f36b491cceec8d12e524b800f291594f44cc9e27e264e"
+pgdata-template-archive-sha256 = "a0a91f4fbd0428787ce78b351ee84f0c33f9ce8578448701b0f6080f7d8b052e"
+pg-dump-wasix-sha256 = "30ff71f1dd82b164ce2a4f595018217f3de7f946c297f0deba0f66f51127193e"
 
 [dependencies]
 anyhow = "1"
 tar = "0.4"
 zstd = { version = "0.13", default-features = false }
 directories = "6"
-wasmtime = { version = "44", default-features = false, features = [
-  "cranelift",
-  "parallel-compilation",
-  "runtime",
-] }
-wasmtime-wasi = { version = "44", default-features = false, features = ["p1"] }
-getrandom = "0.4"
 tracing = "0.1"
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
@@ -55,6 +75,32 @@ regex = "1"
 tempfile = "3"
 hex = "0.4"
 sha2 = "0.10"
+pglite-oxide-assets = { version = "=0.3.0", path = "crates/assets", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+wasmer = { version = "7.2.0-alpha.2", default-features = false, features = [
+  "sys",
+  "headless",
+  "compiler",
+  "wasmer-artifact-load",
+] }
+wasmer-types = "7.2.0-alpha.2"
+wasmer-wasix = "0.702.0-alpha.2"
+webc = "11.0.0"
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+pglite-oxide-aot-aarch64-apple-darwin = { version = "=0.3.0", path = "crates/aot/aarch64-apple-darwin", optional = true }
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+pglite-oxide-aot-x86_64-apple-darwin = { version = "=0.3.0", path = "crates/aot/x86_64-apple-darwin", optional = true }
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+pglite-oxide-aot-x86_64-unknown-linux-gnu = { version = "=0.3.0", path = "crates/aot/x86_64-unknown-linux-gnu", optional = true }
+
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+pglite-oxide-aot-aarch64-unknown-linux-gnu = { version = "=0.3.0", path = "crates/aot/aarch64-unknown-linux-gnu", optional = true }
+
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+pglite-oxide-aot-x86_64-pc-windows-msvc = { version = "=0.3.0", path = "crates/aot/x86_64-pc-windows-msvc", optional = true }
 
 [dev-dependencies]
 sqlx = { version = "0.8", default-features = false, features = [
@@ -71,10 +117,3 @@ path = "src/bin/pglite_dump.rs"
 [[bin]]
 name = "pglite-proxy"
 path = "src/bin/pglite_proxy.rs"
-
-[profile.dev.package.wasmtime-internal-cache]
-# Wasmtime's internal cache crate keys debug builds by the current executable
-# mtime. That defeats the compiled-module cache after ordinary edit/rebuild
-# cycles, so keep this dependency on the stable release-style cache namespace
-# during local dev and tests.
-debug-assertions = false

@@ -1,0 +1,13 @@
+[package]
+name = "pglite-oxide-aot-x86_64-apple-darwin"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Internal Wasmer AOT artifacts for pglite-oxide on x86_64-apple-darwin"
+repository = "https://github.com/f0rr0/pglite-oxide"
+license = "MIT AND Apache-2.0 AND PostgreSQL"
+publish = true
+include = ["Cargo.toml", "README.md", "src/**"]
+
+[lib]
+path = "src/lib.rs"

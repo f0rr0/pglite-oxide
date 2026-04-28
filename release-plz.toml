@@ -1,10 +1,10 @@
 [workspace]
 changelog_update = true
-dependencies_update = false
+dependencies_update = true
 features_always_increment_minor = false
 git_release_enable = true
-git_release_name = "{{ version }}"
-git_tag_name = "{{ version }}"
+git_release_name = "{{ package }} v{{ version }}"
+git_tag_name = "{{ package }}-v{{ version }}"
 pr_branch_prefix = "release-plz-"
 pr_labels = ["release"]
 pr_name = "chore(release): {{ version }}"
@@ -18,7 +18,7 @@ semver_check = true
 [changelog]
 protect_breaking_commits = true
 sort_commits = "oldest"
-tag_pattern = '^[0-9]+\.[0-9]+\.[0-9]+.*$'
+tag_pattern = '^pglite-oxide-v[0-9]+\.[0-9]+\.[0-9]+.*$'
 commit_parsers = [
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
@@ -32,3 +32,66 @@ commit_parsers = [
   { message = "^chore", skip = true },
   { message = "^style", skip = true },
 ]
+
+[[package]]
+name = "pglite-oxide"
+version_group = "pglite-oxide"
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "pglite-oxide-assets",
+  "pglite-oxide-aot-aarch64-apple-darwin",
+  "pglite-oxide-aot-x86_64-apple-darwin",
+  "pglite-oxide-aot-x86_64-unknown-linux-gnu",
+  "pglite-oxide-aot-aarch64-unknown-linux-gnu",
+  "pglite-oxide-aot-x86_64-pc-windows-msvc",
+]
+git_release_enable = true
+git_tag_name = "{{ package }}-v{{ version }}"
+
+[[package]]
+name = "pglite-oxide-assets"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
+
+[[package]]
+name = "pglite-oxide-aot-aarch64-apple-darwin"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
+
+[[package]]
+name = "pglite-oxide-aot-x86_64-apple-darwin"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
+
+[[package]]
+name = "pglite-oxide-aot-x86_64-unknown-linux-gnu"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
+
+[[package]]
+name = "pglite-oxide-aot-aarch64-unknown-linux-gnu"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
+
+[[package]]
+name = "pglite-oxide-aot-x86_64-pc-windows-msvc"
+version_group = "pglite-oxide"
+changelog_update = false
+git_release_enable = false
+git_tag_enable = false
+semver_check = false

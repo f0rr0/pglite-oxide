@@ -12,7 +12,9 @@ use std::thread::{self, JoinHandle};
 use anyhow::{Context, Result, anyhow};
 use tempfile::TempDir;
 
-use crate::pglite::base::{install_into, install_temporary_from_template};
+use crate::pglite::base::{RootLock, install_into, install_temporary_from_template};
+#[cfg(feature = "extensions")]
+use crate::pglite::extensions::Extension;
 use crate::pglite::proxy::PgliteProxy;
 
 /// A supervised local PostgreSQL socket backed by one embedded PGlite runtime.
@@ -25,6 +27,7 @@ use crate::pglite::proxy::PgliteProxy;
 pub struct PgliteServer {
     root: PathBuf,
     _temp_dir: Option<TempDir>,
+    _root_lock: Option<RootLock>,
     endpoint: ServerEndpoint,
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<Result<()>>>,
@@ -89,6 +92,11 @@ impl PgliteServer {
         }
     }
 
+    /// Alias for [`connection_uri`](Self::connection_uri).
+    pub fn database_url(&self) -> String {
+        self.connection_uri()
+    }
+
     /// Request shutdown and wait for the listener thread to exit.
     ///
     /// Close database clients before calling this method. The current proxy owns
@@ -120,6 +128,8 @@ impl Drop for PgliteServer {
 pub struct PgliteServerBuilder {
     root: ServerRoot,
     endpoint: ServerEndpointConfig,
+    #[cfg(feature = "extensions")]
+    extensions: Vec<Extension>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +152,8 @@ impl Default for PgliteServerBuilder {
                 template_cache: true,
             },
             endpoint: ServerEndpointConfig::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
+            #[cfg(feature = "extensions")]
+            extensions: Vec::new(),
         }
     }
 }
@@ -188,27 +200,47 @@ impl PgliteServerBuilder {
         self
     }
 
+    /// Enable a bundled Postgres extension before serving connections.
+    #[cfg(feature = "extensions")]
+    pub fn extension(mut self, extension: Extension) -> Self {
+        self.extensions.push(extension);
+        self
+    }
+
+    /// Enable bundled Postgres extensions before serving connections.
+    #[cfg(feature = "extensions")]
+    pub fn extensions(mut self, extensions: impl IntoIterator<Item = Extension>) -> Self {
+        self.extensions.extend(extensions);
+        self
+    }
+
     /// Install the runtime if needed, initialize the cluster, and start serving.
     pub fn start(self) -> Result<PgliteServer> {
-        let (root, temp_dir) = match self.root {
+        #[cfg(feature = "extensions")]
+        let extensions = self.extensions.clone();
+
+        let (root, temp_dir, root_lock) = match self.root {
             ServerRoot::Path(root) => {
+                let root_lock = RootLock::acquire(&root)?;
                 install_into(&root)?;
-                (root, None)
+                (root, None, Some(root_lock))
             }
             ServerRoot::Temporary { template_cache } => {
                 if template_cache {
                     let (root, temp_dir) = prepare_cached_temporary_root()?;
-                    (root, Some(temp_dir))
+                    (root, Some(temp_dir), None)
                 } else {
                     let temp_dir = TempDir::new().context("create temporary pglite directory")?;
                     install_into(temp_dir.path())?;
-                    (temp_dir.path().to_path_buf(), Some(temp_dir))
+                    (temp_dir.path().to_path_buf(), Some(temp_dir), None)
                 }
             }
         };
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let proxy = PgliteProxy::new(root.clone());
+        #[cfg(feature = "extensions")]
+        let proxy = proxy.with_extensions(extensions);
 
         let (endpoint, handle) = match self.endpoint {
             ServerEndpointConfig::Tcp(addr) => start_tcp(proxy, addr, shutdown.clone())?,
@@ -219,6 +251,7 @@ impl PgliteServerBuilder {
         Ok(PgliteServer {
             root,
             _temp_dir: temp_dir,
+            _root_lock: root_lock,
             endpoint,
             shutdown,
             handle: Some(handle),

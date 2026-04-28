@@ -1,0 +1,51 @@
+{
+  "format-version": 1,
+  "target-triple": "aarch64-apple-darwin",
+  "engine": "llvm-opta",
+  "wasmer-version": "7.2.0-alpha.2",
+  "wasmer-wasix-version": "0.702.0-alpha.2",
+  "artifacts": [
+    {
+      "name": "runtime:pglite",
+      "path": "artifacts/pglite-llvm-opta.bin.zst",
+      "sha256": "72fe6dd4c6f2bd972f9b32497abcc2c546c6fe44c189e9ef54e6d50148709489",
+      "module-sha256": "8043b5b330722c02ef4f36b491cceec8d12e524b800f291594f44cc9e27e264e",
+      "compressed": true
+    },
+    {
+      "name": "runtime-support:plpgsql",
+      "path": "artifacts/plpgsql-llvm-opta.bin.zst",
+      "sha256": "42da9442c81d459b7f8776f2b4e1226214ca4aeb4e6e4c36f3fb01d367142032",
+      "module-sha256": "4f12b85a28c55f522671056201c0e44a0030e61ca4399f0b0daac6598e94eb20",
+      "compressed": true
+    },
+    {
+      "name": "runtime-support:dict_snowball",
+      "path": "artifacts/dict_snowball-llvm-opta.bin.zst",
+      "sha256": "3b894dc29a4c6fa4b92eed8468cbfe38fb68981b3f895193c82fdd6b1004973a",
+      "module-sha256": "6bf773a8fdc170c9dbc2cd9acca6aca35c0d019913cb1b2269c731ba4b0884d6",
+      "compressed": true
+    },
+    {
+      "name": "extension:vector",
+      "path": "artifacts/vector-llvm-opta.bin.zst",
+      "sha256": "cd2c9915d223d662538dab91f0130edec29ca6b604aaae064bddfc3a0e647661",
+      "module-sha256": "e00539fbf75c5034a1bc5b3b23a8a53adf0d7e07bb233b17d91907548b52a1fe",
+      "compressed": true
+    },
+    {
+      "name": "extension:pg_trgm",
+      "path": "artifacts/pg_trgm-llvm-opta.bin.zst",
+      "sha256": "bbfb2403a2693b64f5649f36409d4c9682bb0b93c53a826ebef007ae6d470c99",
+      "module-sha256": "0e94bf0ab30151fbb1e4032dab5797ee742965d4e71a470663f46d94490327d3",
+      "compressed": true
+    },
+    {
+      "name": "tool:pg_dump",
+      "path": "artifacts/pg_dump-llvm-opta.bin.zst",
+      "sha256": "c4b10a85d26e86b59f4ffe5582f03b9b6f2160f1cd163223a0880a5f081d4a72",
+      "module-sha256": "30ff71f1dd82b164ce2a4f595018217f3de7f946c297f0deba0f66f51127193e",
+      "compressed": true
+    }
+  ]
+}

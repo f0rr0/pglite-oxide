@@ -4,6 +4,9 @@
 mod pglite;
 mod protocol;
 
+#[cfg(feature = "extensions")]
+pub use pglite::extensions;
+
 pub use pglite::{
     DataTransferContainer, DescribeQueryParam, DescribeQueryResult, DescribeResultField, FieldInfo,
     GlobalListenerHandle, ListenerHandle, NoticeCallback, ParserMap, Pglite, PgliteBuilder,

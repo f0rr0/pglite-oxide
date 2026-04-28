@@ -1,9 +1,15 @@
+pub(crate) mod aot;
+pub(crate) mod assets;
 pub(crate) mod base;
 pub(crate) mod builder;
 pub(crate) mod client;
 pub(crate) mod errors;
+#[cfg(feature = "extensions")]
+pub mod extensions;
 pub(crate) mod interface;
 pub(crate) mod parse;
+#[cfg(test)]
+pub(crate) mod pg_dump;
 pub(crate) mod postgres_mod;
 pub(crate) mod proxy;
 pub(crate) mod server;

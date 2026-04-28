@@ -1,0 +1,52 @@
+[toolchain]
+wasmer = "7.2.0-alpha.2"
+wasmer-wasix = "0.702.0-alpha.2"
+wasixcc = "2026-03-02.1"
+llvm = "22.1"
+docker_image = "ghcr.io/f0rr0/pglite-oxide-wasix-build"
+docker_image_digest = "sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b"
+
+[build]
+postgres_prefix = "/"
+postgres_pkglibdir = "/lib/postgresql"
+postgres_sharedir = "/share/postgresql"
+main_flags = ["-fwasm-exceptions"]
+extension_flags = ["-fwasm-exceptions", "-fPIC", "-Wl,-shared"]
+archive_format = "tar.zst"
+deterministic_archives = true
+
+[[sources]]
+name = "pglite"
+url = "https://github.com/electric-sql/pglite.git"
+branch = "main"
+commit = "1337be6e33b7c294f8987c918b1e64d2421365ee"
+
+[[sources]]
+name = "pglite-build"
+url = "https://github.com/electric-sql/pglite-build"
+branch = "portable"
+commit = "c195113dbaf09488f8d5eeb2db91dacd123b74d0"
+
+[[sources]]
+name = "postgres-pglite"
+url = "https://github.com/electric-sql/postgres-pglite"
+branch = "REL_17_5_WASM-pglite-builder"
+commit = "51e222cc5f799675b8dd098f5cb7bf46cbad75a2"
+
+[[sources]]
+name = "postgres-pglite-stable"
+url = "https://github.com/electric-sql/postgres-pglite"
+branch = "REL_17_5-pglite"
+commit = "01792c31a62b7045eb22e93d7dad022bb64b1184"
+
+[[sources]]
+name = "pgvector"
+url = "https://github.com/pgvector/pgvector.git"
+branch = "master"
+commit = "d238409becebb8172fe696ffa776badfad4b631c"
+
+[[sources]]
+name = "pglite-bindings"
+url = "https://github.com/electric-sql/pglite-bindings"
+branch = "main"
+commit = "0d31326a41f7251548103f73e601699b0ebae2fa"

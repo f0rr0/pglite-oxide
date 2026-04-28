@@ -1,0 +1,973 @@
+diff --git a/pglite-wasm/interactive_one.c b/pglite-wasm/interactive_one.c
+index c520e2d..da7c998 100644
+--- a/pglite-wasm/interactive_one.c
++++ b/pglite-wasm/interactive_one.c
+@@ -1,4 +1,6 @@
++#include <stdint.h>
+ #include <unistd.h>  // access, unlink
++#include "utils/portal.h"
+ #define PGL_LOOP
+ volatile sigjmp_buf local_sigjmp_buf;
+
+@@ -10,6 +12,19 @@ extern void CleanupTransaction(void);
+ extern void ClientAuthentication(Port *port);
+
+ extern int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
++extern size_t pgl_wasix_input_available(void);
++extern int pgl_wasix_input_peek(void);
++#ifdef PGLITE_WASIX_DL
++extern void pglite_emit_error_report_to_frontend(void);
++
++static void
++pglite_mark_unnamed_active_portal_failed(void)
++{
++	Portal portal = GetPortalByName("");
++	if (PortalIsValid(portal) && portal->status == PORTAL_ACTIVE)
++		MarkPortalFailed(portal);
++}
++#endif
+
+ #define PG_MAX_AUTH_TOKEN_LENGTH	65535
+ static char *
+@@ -120,9 +135,17 @@ clear_error() {
+     DoingCommandRead = false;
+
+     pq_comm_reset();
++#ifdef PGLITE_WASIX_DL
++    whereToSendOutput = DestRemote;
++    pglite_emit_error_report_to_frontend();
++#else
+     EmitErrorReport();
++#endif
+     debug_query_string = NULL;
+
++#ifdef PGLITE_WASIX_DL
++    pglite_mark_unnamed_active_portal_failed();
++#endif
+     AbortCurrentTransaction();
+
+     if (am_walsender)
+@@ -400,4 +423,39 @@ return_early:;
+     pq_flush();
+ }
+
+-#undef PGL_LOOP
+\ No newline at end of file
++#undef PGL_LOOP
++
++__attribute__((export_name("pgl_getMyProcPort"))) int
++pgl_getMyProcPort(void) {
++	if (!MyProcPort)
++		io_init(true, false);
++	return (int) (uintptr_t) MyProcPort;
++}
++
++__attribute__((export_name("pgl_sendConnData"))) void
++pgl_sendConnData(void) {
++	startup_pass(false);
++}
++
++__attribute__((export_name("pgl_pq_flush"))) void
++pgl_pq_flush(void) {
++	pq_flush();
++}
++
++__attribute__((export_name("PostgresMainLoopOnce"))) void
++PostgresMainLoopOnce(void) {
++	interactive_one((int) pgl_wasix_input_available(), pgl_wasix_input_peek());
++}
++
++__attribute__((export_name("PostgresRecoverProtocolError"))) void
++PostgresRecoverProtocolError(void) {
++	clear_error();
++}
++
++__attribute__((export_name("PostgresSendReadyForQueryIfNecessary"))) void
++PostgresSendReadyForQueryIfNecessary(void) {
++	if (send_ready_for_query) {
++		ReadyForQuery(DestRemote);
++		send_ready_for_query = false;
++	}
++}
+diff --git a/pglite-wasm/pg_main.c b/pglite-wasm/pg_main.c
+index bbfa698..9d5e692 100644
+--- a/pglite-wasm/pg_main.c
++++ b/pglite-wasm/pg_main.c
+@@ -396,6 +396,87 @@ __attribute__ ((export_name("pgl_backend")))
+     }
+      }
+
++static void
++pglite_restore_stdin_after_initdb_boot(int saved_stdin) {
++	if (saved_stdin < 0)
++		return;
++
++	dup2(saved_stdin, STDIN_FILENO);
++	close(saved_stdin);
++	clearerr(stdin);
++}
++
++static bool
++pglite_run_initdb_boot_phase(void) {
++	PDEBUG("# 450: restarting in boot mode for initdb");
++	int saved_stdin = dup(STDIN_FILENO);
++	if (saved_stdin < 0) {
++		fprintf(stderr, "could not save stdin before initdb boot phase: %s\n", strerror(errno));
++		return false;
++	}
++	if (freopen(IDB_PIPE_BOOT, "r", stdin) == NULL) {
++		fprintf(stderr, "could not open initdb boot pipe \"%s\": %s\n", IDB_PIPE_BOOT, strerror(errno));
++		pglite_restore_stdin_after_initdb_boot(saved_stdin);
++		return false;
++	}
++
++	char *boot_argv[] = {
++		g_argv[0],
++		"--boot",
++		"-D", PGDATA,
++		"-d", "3",
++		WASM_PGOPTS,
++		"-X", "1048576",
++		NULL
++	};
++	int boot_argc = sizeof(boot_argv) / sizeof(char *) - 1;
++
++	set_pglocale_pgservice(boot_argv[0], PG_TEXTDOMAIN("initdb"));
++
++	optind = 1;
++	BootstrapModeMain(boot_argc, boot_argv, false);
++	pglite_restore_stdin_after_initdb_boot(saved_stdin);
++#if PGDEBUG
++	puts("BOOT FILE:");
++	puts(IDB_PIPE_BOOT);
++#else
++	remove(IDB_PIPE_BOOT);
++#endif
++
++	PDEBUG("# 479: initdb faking shutdown to complete WAL/OID states");
++	pg_proc_exit(66);
++	return true;
++}
++
++static bool
++pglite_run_initdb_single_phase(void) {
++	if (TransamVariables->nextOid < ((Oid) FirstNormalObjectId)) {
++#if PGDEBUG
++		puts("# 482: warning oid base too low, will need to set OID range after initdb(bootstrap/single)");
++#endif
++	}
++#if PGDEBUG
++	fprintf(stdout, "\n\n\n# 483: restarting in single mode for initdb with user '%s' instead of %s\n", getenv("PGUSER"), PGUSER);
++#endif
++	char *single_argv[] = {
++		WASM_PREFIX "/bin/postgres",
++		"--single",
++		"-d", "1", "-B", "16", "-S", "512", "-f", "siobtnmh",
++		"-D", PGDATA,
++		"-F", "-O", "-j",
++		WASM_PGOPTS,
++		"template1",
++		NULL
++	};
++	int single_argc = sizeof(single_argv) / sizeof(char*) - 1;
++	optind = 1;
++	RePostgresSingleUserMain(single_argc, single_argv, WASM_USERNAME);
++	PDEBUG("# 498: initdb faking shutdown to complete WAL/OID states in single mode");
++	pg_proc_exit(66);
++	async_restart = 0;
++	return true;
++}
++
+ #if defined(__EMSCRIPTEN__)
+      EMSCRIPTEN_KEEPALIVE
+ #else
+@@ -437,73 +518,11 @@ __attribute__ ((export_name("pgl_backend")))
+     fprintf(stderr, "\n\n# 444: " __FILE__ "pgl_initdb_main = %d\n", initdb_rc);
+ #endif // PGDEBUG
+     PDEBUG("# 448:" __FILE__);
+-    /* save stdin and use previous initdb output to feed boot mode */
+-    int saved_stdin = dup(STDIN_FILENO);
+-    {
+-        PDEBUG("# 450: restarting in boot mode for initdb");
+-        freopen(IDB_PIPE_BOOT, "r", stdin);
+-
+-        char *boot_argv[] = {
+-            g_argv[0],
+-            "--boot",
+-            "-D", PGDATA,
+-            "-d", "3",
+-            WASM_PGOPTS,
+-            "-X", "1048576",
+-            NULL
+-        };
+-        int boot_argc = sizeof(boot_argv) / sizeof(char *) - 1;
+-
+-        set_pglocale_pgservice(boot_argv[0], PG_TEXTDOMAIN("initdb"));
+-
+-        optind = 1;
+-        BootstrapModeMain(boot_argc, boot_argv, false);
+-        fclose(stdin);
+-#if PGDEBUG
+-        puts("BOOT FILE:");
+-        puts(IDB_PIPE_BOOT);
+-#else
+-        remove(IDB_PIPE_BOOT);
+-#endif
+-        // tdrz: I've commented this out!!!
+-        // stdin = fdopen(saved_stdin, "r");
+-
+-        PDEBUG("# 479: initdb faking shutdown to complete WAL/OID states");
+-        pg_proc_exit(66);
+-    }
+-
+-    /* use previous initdb output to feed single mode */
+-
+-    /* or resume a previous db */
+-    //IsPostmasterEnvironment = true;
+-    if (TransamVariables->nextOid < ((Oid) FirstNormalObjectId)) {
+-#if PGDEBUG
+-        puts("# 482: warning oid base too low, will need to set OID range after initdb(bootstrap/single)");
+-#endif
+-    }
+-/*
+-    {
+-#if PGDEBUG
+-        fprintf(stdout, "\n\n\n# 483: restarting in single mode for initdb with user '%s' instead of %s\n", getenv("PGUSER"), PGUSER);
+-#endif
+-        char *single_argv[] = {
+-            WASM_PREFIX "/bin/postgres",
+-            "--single",
+-            "-d", "1", "-B", "16", "-S", "512", "-f", "siobtnmh",
+-            "-D", PGDATA,
+-            "-F", "-O", "-j",
+-            WASM_PGOPTS,
+-            "template1",
+-            NULL
+-        };
+-        int single_argc = sizeof(single_argv) / sizeof(char*) - 1;
+-        optind = 1;
+-        RePostgresSingleUserMain(single_argc, single_argv, WASM_USERNAME);
+-PDEBUG("# 498: initdb faking shutdown to complete WAL/OID states in single mode");
+-        async_restart = 1;
+-    }
+-*/
+-    async_restart = 1;
++	if (!pglite_run_initdb_boot_phase() || !pglite_run_initdb_single_phase()) {
++		optind = 0;
++		goto initdb_done;
++	}
++	async_restart = 0;
+   initdb_done:;
+     pgl_idb_status |= IDB_CALLED;
+
+diff --git a/pglite-wasm/pg_proto.c b/pglite-wasm/pg_proto.c
+index 2ba14a8..fcd1747 100644
+--- a/pglite-wasm/pg_proto.c
++++ b/pglite-wasm/pg_proto.c
+@@ -55,13 +55,11 @@
+ 							       paramTypes, numParams);
+ 			    //valgrind_report_error_query(query_string);
+ 		    }
+-#pragma warning "-------------------- TEST ------------------"
+ #if defined(PGL_LOOP)
+-send_ready_for_query = false;
++	send_ready_for_query = false;
+ #endif
+-#pragma warning "-------------------- /TEST ------------------"
+
+-		    break;
++			    break;
+
+ 	    case 'B': 			/* PqMsg_Bind : exec_bind_message */
+             {
+@@ -78,14 +76,12 @@ send_ready_for_query = false;
+
+ 		        /* exec_bind_message does valgrind_report_error_query */
+             }
+-#pragma warning "-------------------- TEST ------------------"
+ #if defined(PGL_LOOP)
+-if (send_ready_for_query)
+-    send_ready_for_query = !pipelining;
++	if (send_ready_for_query)
++	    send_ready_for_query = !pipelining;
+ #endif
+-#pragma warning "-------------------- /TEST ------------------"
+
+-		    break;
++			    break;
+
+ 	    case 'E':			/* PqMsg_Execute : execute */
+ 		    {
+@@ -105,15 +101,13 @@ PDEBUG("# 82: exec_execute_message");
+
+ 			    /* exec_execute_message does valgrind_report_error_query */
+ 		    }
+-#pragma warning "-------------------- TEST ------------------"
+ #if defined(PGL_LOOP)
+-if (send_ready_for_query)
+-    send_ready_for_query = !pipelining;
++	if (send_ready_for_query)
++	    send_ready_for_query = !pipelining;
+ #endif
+
+-#pragma warning "-------------------- /TEST ------------------"
+
+-		    break;
++			    break;
+
+ 	    case 'F':			/* PqMsg_FunctionCall : fastpath function call */
+             {
+@@ -198,14 +192,12 @@ if (send_ready_for_query)
+
+ 			    //valgrind_report_error_query("CLOSE message");
+ 		    }
+-#pragma warning "-------------------- TEST ------------------"
+ #if defined(PGL_LOOP)
+-if (send_ready_for_query)
+-    send_ready_for_query = !pipelining;
++	if (send_ready_for_query)
++	    send_ready_for_query = !pipelining;
+ #endif
+
+-#pragma warning "-------------------- /TEST ------------------"
+-		    break;
++			    break;
+
+ 	    case 'D':			/* PqMsg_Describe : describe */
+ 		    {
+@@ -238,14 +230,12 @@ PDEBUG("# 187: exec_describe_ statement/portal");
+
+ 			    // valgrind_report_error_query("DESCRIBE message");
+ 		    }
+-#pragma warning "-------------------- TEST ------------------"
+ #if defined(PGL_LOOP)
+-if (send_ready_for_query)
+-    send_ready_for_query = !pipelining;
++	if (send_ready_for_query)
++	    send_ready_for_query = !pipelining;
+ #endif
+-#pragma warning "-------------------- /TEST ------------------"
+
+-		    break;
++			    break;
+
+ 	    case 'H':			/* PqMsg_Flush : flush */
+             {
+@@ -339,4 +329,3 @@ PDEBUG("# 251:proc_exit/skip and repl stop"); //proc_exit(0);
+ 				     errmsg("invalid frontend message type %d",
+ 						    firstchar)));
+     } // end switch
+-
+diff --git a/pglite-wasm/pgl_os.h b/pglite-wasm/pgl_os.h
+index a8a30e5..b140ac0 100644
+--- a/pglite-wasm/pgl_os.h
++++ b/pglite-wasm/pgl_os.h
+@@ -1,55 +1,69 @@
+ #pragma once
+
++#ifndef PGLITE_WASIX_DL
++#error "pgl_os.h popen emulation is only maintained for the PGLITE_WASIX_DL build personality"
++#endif
+
+ #include <sys/stat.h>
+
+
++#include <errno.h>
+ #include <stdio.h> // FILE
++#include <string.h>
+
+ FILE* IDB_PIPE_FP = NULL;
+-int IDB_STAGE = 0;
++const char *IDB_PIPE_NAME = NULL;
+
+
+-/*
+- * and now popen will return predefined slot from a file list
+- * as file handle in initdb.c
+- */
++static FILE *
++pglite_open_initdb_pipe(const char *command, const char *type) {
++    (void) type;
++    if (command == NULL) {
++        errno = EINVAL;
++        return NULL;
++    }
+
+-FILE *pgl_popen(const char *command, const char *type) {
+-    if (IDB_STAGE>1) {
+-    	fprintf(stderr,"# popen[%s]\n", command);
+-    	return stderr;
++    if (strstr(command, "--boot") != NULL) {
++        IDB_PIPE_NAME = IDB_PIPE_BOOT;
++        IDB_PIPE_FP = fopen(IDB_PIPE_NAME, "w");
++        return IDB_PIPE_FP;
+     }
+
+-    if (!IDB_STAGE) {
+-        fprintf(stderr,"# popen[%s] (BOOT)\n", command);
+-        IDB_PIPE_FP = fopen( IDB_PIPE_BOOT, "w");
+-        IDB_STAGE = 1;
+-    } else {
+-        fprintf(stderr,"# popen[%s] (SINGLE)\n", command);
+-        IDB_PIPE_FP = fopen( IDB_PIPE_SINGLE, "w");
+-        IDB_STAGE = 2;
++    if (strstr(command, "--single") != NULL) {
++        IDB_PIPE_NAME = IDB_PIPE_SINGLE;
++        IDB_PIPE_FP = fopen(IDB_PIPE_NAME, "w");
++        return IDB_PIPE_FP;
+     }
+
+-    return IDB_PIPE_FP;
++    errno = ENOSYS;
++    return NULL;
++}
++
++/*
++ * initdb normally uses popen() to feed generated scripts to child postgres
++ * processes. In the embedded WASIX build there is no child process, so we
++ * capture only the two expected boot/single invocations to deterministic files.
++ */
++FILE *pgl_popen(const char *command, const char *type) {
++    return pglite_open_initdb_pipe(command, type);
+ }
+
+ #define popen(command, mode) pgl_popen(command, mode)
+
+ int
+ pgl_pclose(FILE *stream) {
+-    if (IDB_STAGE==1)
+-        fprintf(stderr,"# pg_pclose(%s) 133:" __FILE__ "\n" , IDB_PIPE_BOOT);
+-    if (IDB_STAGE==2)
+-        fprintf(stderr,"# pg_pclose(%s) 135:" __FILE__ "\n" , IDB_PIPE_SINGLE);
+-
+-    if (IDB_PIPE_FP) {
+-        fflush(IDB_PIPE_FP);
+-        fclose(IDB_PIPE_FP);
++    int rc;
++
++    if (stream == NULL) {
++        errno = EINVAL;
++        return -1;
++    }
++
++    fflush(stream);
++    rc = fclose(stream);
++    if (stream == IDB_PIPE_FP) {
+         IDB_PIPE_FP = NULL;
++        IDB_PIPE_NAME = NULL;
+     }
+-    return 0;
++    return rc;
+ }
+-
+-
+-
+diff --git a/pglite-wasm/pgl_stubs.h b/pglite-wasm/pgl_stubs.h
+index 9a56a59..23909de 100644
+--- a/pglite-wasm/pgl_stubs.h
++++ b/pglite-wasm/pgl_stubs.h
+@@ -1,5 +1,9 @@
+ #pragma once
+
++#ifndef PGLITE_WASIX_DL
++#error "pgl_stubs.h frontend utility replacements are only maintained for PGLITE_WASIX_DL"
++#endif
++
+ #include "../src/interfaces/libpq/pqexpbuffer.h"
+
+ // option_parse_int parse_sync_method
+@@ -30,17 +34,43 @@ get_restricted_token(void) {
+
++void *pg_malloc_extended(size_t size, int flags);
++
+ void *
+ pg_malloc(size_t size) {
+-	return malloc(size);
++	return pg_malloc_extended(size, 0);
+ }
+
+ void *
+ pg_malloc_extended(size_t size, int flags) {
+-    return malloc(size);
++	if (size == 0)
++		size = 1;
++	void *tmp = malloc(size);
++	if (tmp == NULL)
++	{
++		if ((flags & MCXT_ALLOC_NO_OOM) != 0)
++			return NULL;
++		fprintf(stderr, _("out of memory\n"));
++		exit(EXIT_FAILURE);
++	}
++	if ((flags & MCXT_ALLOC_ZERO) != 0)
++		MemSet(tmp, 0, size);
++	return tmp;
++}
++
++void *
++pg_malloc0(size_t size) {
++	return pg_malloc_extended(size, MCXT_ALLOC_ZERO);
+ }
+
+ void *
+ pg_realloc(void *ptr, size_t size) {
+-    return realloc(ptr, size);
++	if (ptr == NULL && size == 0)
++		size = 1;
++	void *tmp = realloc(ptr, size);
++	if (!tmp) {
++		fprintf(stderr, _("out of memory\n"));
++		exit(EXIT_FAILURE);
++	}
++	return tmp;
+ }
+
+ char *
+@@ -63,16 +93,19 @@ simple_prompt(const char *prompt, bool echo) {
+
+
+ #ifndef PG16
+-int
++__attribute__((export_name("ProcessStartupPacket"))) int
+ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done) {
+-    PDEBUG("# 89:" __FILE__ " ProcessStartupPacket: STUB");
++	(void) port;
++	(void) ssl_done;
++	(void) gss_done;
+     return STATUS_OK;
+ }
+
+ const char *
+ select_default_timezone(const char *share_path) {
+-    fprintf(stderr, "# 95:" __FILE__ " select_default_timezone(%s): STUB\n", share_path);
+-	return getenv("TZ");
++	(void) share_path;
++	const char *tz = getenv("TZ");
++	return tz ? tz : "GMT";
+ }
+
+
+diff --git a/src/Makefile.shlib b/src/Makefile.shlib
+index befb131..18d667f 100644
+--- a/src/Makefile.shlib
++++ b/src/Makefile.shlib
+@@ -239,6 +239,17 @@ ifeq ($(PORTNAME), emscripten)
+ #  endif
+ endif
+
++ifeq ($(PORTNAME), wasix-dl)
++  LINK.shared       = $(COMPILER) -shared -Wno-unused-function
++  ifdef soname
++    # wasm side modules use unversioned shared libraries
++    shlib     = $(shlib_bare)
++    soname        = $(shlib_bare)
++  endif
++  BUILD.exports     = ( $(AWK) '/^[^\#]/ {printf "%s\n",$$1}' $< ) | sort -u >$@
++  exports_file      = $(SHLIB_EXPORTS:%.txt=%.list)
++endif
++
+ ifeq ($(PORTNAME), wasi)
+   LINK.shared       = wasi-shared
+   ifdef soname
+diff --git a/src/backend/Makefile b/src/backend/Makefile
+index d4e40e4..8c366c7 100644
+--- a/src/backend/Makefile
++++ b/src/backend/Makefile
+@@ -62,7 +62,7 @@ override LDFLAGS := $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE)
+
+ all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
+
+-ifneq ($(PORTNAME), emscripten)
++ifeq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+ ifneq ($(PORTNAME), cygwin)
+ ifneq ($(PORTNAME), win32)
+
+@@ -124,6 +124,30 @@ pglite: pglite-exported-functions
+         -lnodefs.js -lidbfs.js -lxml2 -lz
+ endif
+
++ifeq ($(PORTNAME), wasix-dl)
++AR ?= llvm-ar
++WASM_LD ?= $(shell $(CC) -print-prog-name=wasm-ld)
++LIBPGCORE ?= $(top_builddir)/libpgcore.a
++LIBPG = $(top_builddir)/libpostgres.a
++PGCORE = $(top_builddir)/src/common/libpgcommon_srv.a $(top_builddir)/src/port/libpgport_srv.a $(LIBPG)
++PGMAIN = main/main.o tcop/postgres.o
++PGLITE_MAIN = $(top_srcdir)/pglite-wasm/pg_main.c
++
++postgres: $(OBJS)
++	$(AR) rcs $(top_builddir)/libpgmain.a $(PGMAIN)
++	$(AR) rcs $(LIBPG) $(filter-out $(PGMAIN),$(call expand_subsys,$(ONLYOBJS)))
++	$(WASM_LD) --relocatable -o $(top_builddir)/libpgcore.o --whole-archive $(PGCORE) --no-whole-archive
++	$(AR) rcs $(LIBPGCORE) $(top_builddir)/libpgcore.o
++	COPTS="$(LOPTS)" $(CC) $(MAIN_MODULE) $(CFLAGS) $(LDFLAGS) -nostartfiles -o $@ $(LIBPGCORE) $(top_builddir)/libpgmain.a $(LIBS)
++
++pglite: $(OBJS)
++	$(AR) rcs $(LIBPG) $(filter-out $(PGMAIN),$(call expand_subsys,$(ONLYOBJS)))
++	$(WASM_LD) --relocatable -o $(top_builddir)/libpgcore.o --whole-archive $(PGCORE) --no-whole-archive
++	$(AR) rcs $(LIBPGCORE) $(top_builddir)/libpgcore.o
++	$(CC) $(CFLAGS) $(LDFLAGS) -D__PGLITE__ -DPG_PREFIX=/ -I$(top_builddir)/src/include -I$(top_builddir)/src/ -I$(top_builddir)/src/interfaces/libpq -I$(top_srcdir)/src/include -I$(top_srcdir)/src/ -I$(top_srcdir)/src/interfaces/libpq -I$(top_srcdir)/pglite-wasm -o pglite.o -c $(PGLITE_MAIN) -Wno-incompatible-pointer-types-discards-qualifiers
++	COPTS="$(LOPTS)" $(CC) $(MAIN_MODULE) $(CFLAGS) $(LDFLAGS) -nostartfiles -o $@ pglite.o $(LIBPGCORE) $(LIBS)
++endif
++
+ ifeq ($(PORTNAME), wasi)
+ AR ?= llvm-ar
+ LIBPGCORE ?= $(top_builddir)/libpgcore.a
+diff --git a/src/backend/storage/file/fd.c b/src/backend/storage/file/fd.c
+index d7a35c6..9da1928 100644
+--- a/src/backend/storage/file/fd.c
++++ b/src/backend/storage/file/fd.c
+@@ -3843,7 +3843,7 @@ fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel)
+ 	 * Some OSes don't allow us to fsync directories at all, so we can ignore
+ 	 * those errors. Anything else needs to be logged.
+ 	 */
+-	if (returncode != 0 && !(isdir && (errno == EBADF || errno == EINVAL)))
++	if (returncode != 0 && !(isdir && (errno == EBADF || errno == EINVAL || errno == EISDIR)))
+ 	{
+ 		int			save_errno;
+
+diff --git a/src/backend/utils/error/elog.c b/src/backend/utils/error/elog.c
+index dcd1ea8..21d27b3 100644
+--- a/src/backend/utils/error/elog.c
++++ b/src/backend/utils/error/elog.c
+@@ -1744,6 +1744,30 @@ EmitErrorReport(void)
+ 	recursion_depth--;
+ }
+
++#ifdef PGLITE_WASIX_DL
++/*
++ * PGlite's WASIX host can receive PostgreSQL ERROR unwinds as a Wasmer trap
++ * before the embedded protocol loop resumes at its sigsetjmp boundary.  The
++ * explicit host recovery export calls back while ErrorData is still live, so
++ * preserve PostgreSQL's own fields and frontend formatter while recomputing the
++ * client-output decision at that boundary.
++ */
++void
++pglite_emit_error_report_to_frontend(void)
++{
++	ErrorData  *edata;
++
++	if (errordata_stack_depth < 0)
++		return;
++
++	edata = &errordata[errordata_stack_depth];
++	if (edata->elevel < ERROR)
++		edata->elevel = ERROR;
++	edata->output_to_client = true;
++	EmitErrorReport();
++}
++#endif
++
+ /*
+  * CopyErrorData --- obtain a copy of the topmost error stack entry
+  *
+diff --git a/src/common/file_utils.c b/src/common/file_utils.c
+index 6bac537..4623a45 100644
+--- a/src/common/file_utils.c
++++ b/src/common/file_utils.c
+@@ -413,7 +413,7 @@ fsync_fname(const char *fname, bool isdir)
+ 	 * Some OSes don't allow us to fsync directories at all, so we can ignore
+ 	 * those errors. Anything else needs to be reported.
+ 	 */
+-	if (returncode != 0 && !(isdir && (errno == EBADF || errno == EINVAL)))
++	if (returncode != 0 && !(isdir && (errno == EBADF || errno == EINVAL || errno == EISDIR)))
+ 	{
+ 		pg_log_error("could not fsync file \"%s\": %m", fname);
+ 		(void) close(fd);
+diff --git a/src/include/fmgr.h b/src/include/fmgr.h
+index 7c960bc..ec2fa13 100644
+--- a/src/include/fmgr.h
++++ b/src/include/fmgr.h
+@@ -505,7 +505,7 @@ PG_MAGIC_FUNCTION_NAME(void) \
+ 	return &Pg_magic_data; \
+ } \
+ extern int no_such_variable
+-#if defined(__wasi__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasi__) && !defined(__EMSCRIPTEN__) && !defined(PGLITE_WASIX_DL)
+ #undef PG_MODULE_MAGIC
+ #define PG_MODULE_MAGIC
+ #endif
+diff --git a/src/include/port/wasix-dl.h b/src/include/port/wasix-dl.h
+new file mode 100644
+index 0000000..5f09795
+--- /dev/null
++++ b/src/include/port/wasix-dl.h
+@@ -0,0 +1,76 @@
++#pragma once
++
++#ifndef I_WASIX_DL
++#define I_WASIX_DL
++
++#undef HAVE_PTHREAD
++
++#ifdef HAVE_GETRLIMIT
++#undef HAVE_GETRLIMIT
++#endif
++
++#ifdef HAVE_SETSID
++#undef HAVE_SETSID
++#endif
++
++#define PLATFORM_DEFAULT_SYNC_METHOD SYNC_METHOD_FDATASYNC
++
++#ifndef EMSCRIPTEN_KEEPALIVE
++#define EMSCRIPTEN_KEEPALIVE __attribute__((used))
++#endif
++
++#ifndef __declspec
++#define __declspec(x) __attribute__((used))
++#endif
++
++#define em_callback_func void
++#define emscripten_set_main_loop(...)
++#define emscripten_force_exit(...)
++#define EM_JS(...)
++
++#ifdef __PGLITE__
++#include <errno.h>
++#define fe_utils_quote_all_identifiers quote_all_identifiers
++#define sdk_sock_flush() ((void) 0)
++#define fork() (errno = ENOSYS, -1)
++#ifndef PDEBUG
++#define PDEBUG(...) ((void) 0)
++#endif
++#ifndef WASM_USERNAME
++#define WASM_USERNAME "postgres"
++#endif
++#ifndef WASM_PREFIX
++#define WASM_PREFIX ""
++#endif
++#ifndef PGS_ILOCK
++#define PGS_ILOCK "/base/.s.PGSQL.5432.lock.in"
++#endif
++#ifndef PGS_IN
++#define PGS_IN "/base/.s.PGSQL.5432.in"
++#endif
++#ifndef PGS_OLOCK
++#define PGS_OLOCK "/base/.s.PGSQL.5432.lock.out"
++#endif
++#ifndef PGS_OUT
++#define PGS_OUT "/base/.s.PGSQL.5432.out"
++#endif
++#ifndef WASM_PGOPTS
++#define WASM_PGOPTS \
++	"-c", "log_checkpoints=false", \
++	"-c", "search_path=pg_catalog", \
++	"-c", "exit_on_error=true", \
++	"-c", "ignore_invalid_pages=on", \
++	"-c", "temp_buffers=8MB", \
++	"-c", "work_mem=4MB", \
++	"-c", "fsync=on", \
++	"-c", "synchronous_commit=on", \
++	"-c", "wal_buffers=4MB", \
++	"-c", "min_wal_size=80MB", \
++	"-c", "shared_buffers=128MB"
++#endif
++extern int pgl_system(const char *command);
++#define system_wasi(command) pgl_system(command)
++#define proc_exit(arg) pg_proc_exit(arg)
++#endif
++
++#endif /* I_WASIX_DL */
+diff --git a/src/include/port/wasix-dl/sys/ipc.h b/src/include/port/wasix-dl/sys/ipc.h
+new file mode 100644
+index 0000000..0872fdb
+--- /dev/null
++++ b/src/include/port/wasix-dl/sys/ipc.h
+@@ -0,0 +1,37 @@
++#pragma once
++
++#include <sys/types.h>
++
++#ifndef IPC_PRIVATE
++#define IPC_PRIVATE ((key_t) 0)
++#endif
++#ifndef IPC_CREAT
++#define IPC_CREAT 01000
++#endif
++#ifndef IPC_EXCL
++#define IPC_EXCL 02000
++#endif
++#ifndef IPC_NOWAIT
++#define IPC_NOWAIT 04000
++#endif
++
++#ifndef IPC_RMID
++#define IPC_RMID 0
++#endif
++#ifndef IPC_SET
++#define IPC_SET 1
++#endif
++#ifndef IPC_STAT
++#define IPC_STAT 2
++#endif
++
++struct ipc_perm
++{
++	key_t __key;
++	uid_t uid;
++	gid_t gid;
++	uid_t cuid;
++	gid_t cgid;
++	mode_t mode;
++	unsigned short __seq;
++};
+diff --git a/src/include/port/wasix-dl/sys/shm.h b/src/include/port/wasix-dl/sys/shm.h
+new file mode 100644
+index 0000000..91f59d9
+--- /dev/null
++++ b/src/include/port/wasix-dl/sys/shm.h
+@@ -0,0 +1,30 @@
++#pragma once
++
++#include <stddef.h>
++#include <time.h>
++#include <sys/ipc.h>
++
++#ifndef SHM_RDONLY
++#define SHM_RDONLY 010000
++#endif
++#ifndef SHM_RND
++#define SHM_RND 020000
++#endif
++#ifndef SHMLBA
++#define SHMLBA 4096
++#endif
++
++struct shmid_ds
++{
++	struct ipc_perm shm_perm;
++	size_t shm_segsz;
++	time_t shm_atime;
++	time_t shm_dtime;
++	time_t shm_ctime;
++	unsigned long shm_nattch;
++};
++
++int shmget(key_t key, size_t size, int shmflg);
++void *shmat(int shmid, const void *shmaddr, int shmflg);
++int shmdt(const void *shmaddr);
++int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+diff --git a/src/makefiles/Makefile.wasix-dl b/src/makefiles/Makefile.wasix-dl
+new file mode 100644
+index 0000000..6ebf6de
+--- /dev/null
++++ b/src/makefiles/Makefile.wasix-dl
+@@ -0,0 +1,14 @@
++# Use unversioned shared objects for WebAssembly side modules.
++rpath =
++AROPT = crs
++
++# Rule for building a shared library from a single .o file.
++%.so: %.o
++	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LDFLAGS_SL) -shared -o $@
++
++# WASIX side modules install import lists under the same layout contract that
++# PGlite's dynamic loader consumes, without reusing Emscripten-named variables.
++wasm_dl_include_dir := $(pkgincludedir)/wasix-dl
++wasm_dl_base_dir := $(wasm_dl_include_dir)/base
++wasm_dl_imports_dir := $(wasm_dl_base_dir)/imports
++wasm_dl_extension_dir := $(wasm_dl_include_dir)/extension
++wasm_dl_extension_imports_dir := $(wasm_dl_extension_dir)/imports
+diff --git a/src/makefiles/pgxs.mk b/src/makefiles/pgxs.mk
+index bf49161..5174429 100644
+--- a/src/makefiles/pgxs.mk
++++ b/src/makefiles/pgxs.mk
+@@ -249,12 +249,12 @@ ifdef MODULES
+ ifeq ($(with_llvm), yes)
+ 	$(foreach mod, $(MODULES), $(call install_llvm_module,$(mod),$(mod).bc))
+ endif # with_llvm
+-ifeq ($(PORTNAME), emscripten)
++ifneq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+ 	$(LLVM_NM) -u *.o    | awk '{print $$2}'              | sed '/^$$/d' | sort -u > undef.txt
+ 	$(LLVM_NM)    *.o    | awk '$$2 ~ /^[TDB]$$/ {print $$3}' | sed '/^$$/d' | sort -u > defs.txt
+-	comm -23 undef.txt defs.txt > '$(emscripten_extension_imports_dir)/$(MODULES).imports'
++	comm -23 undef.txt defs.txt > '$(if $(wasm_dl_extension_imports_dir),$(wasm_dl_extension_imports_dir),$(emscripten_extension_imports_dir))/$(MODULES).imports'
+ 	rm -f undef.txt defs.txt
+-endif # PORTNAME=emscripten
++endif # PORTNAME=emscripten wasix-dl
+ endif # MODULES
+ ifdef DOCS
+ ifdef docdir
+@@ -277,12 +277,12 @@ ifdef MODULE_big
+ ifeq ($(with_llvm), yes)
+ 	$(call install_llvm_module,$(MODULE_big),$(OBJS))
+ endif # with_llvm
+-ifeq ($(PORTNAME), emscripten)
++ifneq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+ 	$(LLVM_NM) -u $(OBJS)    | awk '{print $$2}'              | sed '/^$$/d' | sort -u > undef.txt
+ 	$(LLVM_NM)    $(OBJS)    | awk '$$2 ~ /^[TDB]$$/ {print $$3}' | sed '/^$$/d' | sort -u > defs.txt
+-	comm -23 undef.txt defs.txt > '$(emscripten_extension_imports_dir)/$(MODULE_big).imports'
++	comm -23 undef.txt defs.txt > '$(if $(wasm_dl_extension_imports_dir),$(wasm_dl_extension_imports_dir),$(emscripten_extension_imports_dir))/$(MODULE_big).imports'
+ 	rm -f undef.txt defs.txt
+-endif # PORTNAME=emscripten
++endif # PORTNAME=emscripten wasix-dl
+
+ install: install-lib
+ endif # MODULE_big
+@@ -314,7 +314,7 @@ ifdef MODULE_big
+ installdirs: installdirs-lib
+ endif # MODULE_big
+
+-ifeq ($(PORTNAME), emscripten)
++ifneq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+-	$(MKDIR_P) '$(DESTDIR)$(emscripten_extension_imports_dir)'
++	$(MKDIR_P) '$(DESTDIR)$(if $(wasm_dl_extension_imports_dir),$(wasm_dl_extension_imports_dir),$(emscripten_extension_imports_dir))'
+ endif
+
+@@ -333,7 +333,7 @@ ifdef MODULES
+ ifeq ($(with_llvm), yes)
+ 	$(foreach mod, $(MODULES), $(call uninstall_llvm_module,$(mod)))
+ endif # with_llvm
+-ifeq ($(PORTNAME), emscripten)
++ifneq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+-	rm -f '$(DESTDIR)$(emscripten_extension_imports_dir)/$(MODULES).imports'
++	rm -f '$(DESTDIR)$(if $(wasm_dl_extension_imports_dir),$(wasm_dl_extension_imports_dir),$(emscripten_extension_imports_dir))/$(MODULES).imports'
+ endif
+ endif # MODULES
+@@ -358,7 +358,7 @@ ifeq ($(with_llvm), yes)
+ 	$(call uninstall_llvm_module,$(MODULE_big))
+ endif # with_llvm
+
+-ifeq ($(PORTNAME), emscripten)
++ifneq (,$(filter emscripten wasix-dl,$(PORTNAME)))
+-	rm -f '$(DESTDIR)$(emscripten_extension_imports_dir)/$(MODULE_big).imports'
++	rm -f '$(DESTDIR)$(if $(wasm_dl_extension_imports_dir),$(wasm_dl_extension_imports_dir),$(emscripten_extension_imports_dir))/$(MODULE_big).imports'
+ endif
+
+diff --git a/src/template/wasix-dl b/src/template/wasix-dl
+new file mode 100644
+index 0000000..f747e11
+--- /dev/null
++++ b/src/template/wasix-dl
+@@ -0,0 +1,13 @@
++# src/template/wasix-dl
++
++# Prefer unnamed POSIX semaphores if available, unless user overrides choice.
++if test x"$PREFERRED_SEMAPHORES" = x"" ; then
++  PREFERRED_SEMAPHORES=UNNAMED_POSIX
++fi
++
++# Keep the same GNU feature surface as the Emscripten/WASI templates and
++# identify the dynamic-linking WASIX personality inside shared extension code.
++CPPFLAGS="$CPPFLAGS -D_GNU_SOURCE -DPGLITE_WASIX_DL"
++
++# Side modules must be position-independent WebAssembly objects.
++CFLAGS_SL="-fPIC"
+diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog.c
+--- a/src/backend/access/transam/xlog.c
++++ b/src/backend/access/transam/xlog.c
+@@ -2519,11 +2519,13 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
+ 				 * like a checkpoint is needed, forcibly update RedoRecPtr and
+ 				 * recheck.
+ 				 */
++#ifndef __PGLITE__
+ 				if (IsUnderPostmaster && XLogCheckpointNeeded(openLogSegNo))
+ 				{
+ 					(void) GetRedoRecPtr();
+ 					if (XLogCheckpointNeeded(openLogSegNo))
+ 						RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+ 				}
++#endif
+ 			}
+ 		}

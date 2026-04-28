@@ -1,0 +1,6 @@
+{
+  "architectureIndependent": true,
+  "archiveSha256": "a0a91f4fbd0428787ce78b351ee84f0c33f9ce8578448701b0f6080f7d8b052e",
+  "postgresVersion": "17",
+  "wasmSha256": "8043b5b330722c02ef4f36b491cceec8d12e524b800f291594f44cc9e27e264e"
+}

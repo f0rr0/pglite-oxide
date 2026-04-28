@@ -19,7 +19,7 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
-# Wasmtime and dev-only PostgreSQL client compatibility tests pull a few
+# Wasmer and dev-only PostgreSQL client compatibility tests pull a few
 # legitimate duplicate transitive versions. Keep this gate focused on actionable
 # supply-chain failures.
 multiple-versions = "allow"

@@ -12,7 +12,13 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+#[cfg(feature = "extensions")]
+use crate::pglite::assets;
+#[cfg(feature = "extensions")]
+use crate::pglite::base::install_bundled_extension_bytes;
 use crate::pglite::base::install_into;
+#[cfg(feature = "extensions")]
+use crate::pglite::extensions::{Extension, create_extension_sql};
 use crate::pglite::postgres_mod::PostgresMod;
 use crate::pglite::transport::Transport;
 
@@ -25,11 +31,13 @@ const MAX_FRONTEND_MESSAGE: usize = 64 * 1024 * 1024;
 /// Blocking PostgreSQL socket proxy for the embedded PGlite runtime.
 ///
 /// The proxy intentionally runs each accepted connection on one blocking thread
-/// and does not call Wasmtime from an async runtime. That avoids the nested
-/// runtime panic that can happen when an async wrapper blocks inside Wasmtime.
+/// and does not call into the WASIX backend from an async runtime. That avoids
+/// nested runtime panics when an async wrapper blocks inside the embedded engine.
 #[derive(Debug, Clone)]
 pub struct PgliteProxy {
     root: Arc<PathBuf>,
+    #[cfg(feature = "extensions")]
+    extensions: Arc<Vec<Extension>>,
 }
 
 impl PgliteProxy {
@@ -37,7 +45,16 @@ impl PgliteProxy {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: Arc::new(root.into()),
+            #[cfg(feature = "extensions")]
+            extensions: Arc::new(Vec::new()),
         }
+    }
+
+    /// Enable bundled extensions in the proxy backend before accepting clients.
+    #[cfg(feature = "extensions")]
+    pub(crate) fn with_extensions(mut self, extensions: Vec<Extension>) -> Self {
+        self.extensions = Arc::new(extensions);
+        self
     }
 
     /// Return the root directory used for runtime installation and cluster data.
@@ -56,7 +73,7 @@ impl PgliteProxy {
 
     /// Serve an existing TCP listener forever. Connections are handled one at a time.
     pub fn serve_tcp_listener(&self, listener: TcpListener) -> Result<()> {
-        let mut backend = WireBackend::open(&self.root)?;
+        let mut backend = WireBackend::open(&self.root, self.extensions())?;
         for stream in listener.incoming() {
             let stream = stream.context("accept TCP proxy connection")?;
             self.handle_stream(stream, &mut backend)?;
@@ -74,7 +91,7 @@ impl PgliteProxy {
             .set_nonblocking(true)
             .context("configure TCP proxy listener as nonblocking")?;
 
-        let mut backend = match WireBackend::open(&self.root) {
+        let mut backend = match WireBackend::open(&self.root, self.extensions()) {
             Ok(backend) => {
                 if let Some(ready) = ready {
                     let _ = ready.send(Ok(()));
@@ -114,7 +131,7 @@ impl PgliteProxy {
 
     /// Accept and handle `count` TCP connections using one embedded backend.
     pub fn accept_tcp_connections(&self, listener: &TcpListener, count: usize) -> Result<()> {
-        let mut backend = WireBackend::open(&self.root)?;
+        let mut backend = WireBackend::open(&self.root, self.extensions())?;
         for _ in 0..count {
             let (stream, _) = listener.accept().context("accept TCP proxy connection")?;
             self.handle_stream(stream, &mut backend)?;
@@ -138,7 +155,7 @@ impl PgliteProxy {
     /// Serve an existing Unix-domain listener forever. Connections are handled one at a time.
     #[cfg(unix)]
     pub fn serve_unix_listener(&self, listener: UnixListener) -> Result<()> {
-        let mut backend = WireBackend::open(&self.root)?;
+        let mut backend = WireBackend::open(&self.root, self.extensions())?;
         for stream in listener.incoming() {
             let stream = stream.context("accept Unix proxy connection")?;
             self.handle_stream(stream, &mut backend)?;
@@ -157,7 +174,7 @@ impl PgliteProxy {
             .set_nonblocking(true)
             .context("configure Unix proxy listener as nonblocking")?;
 
-        let mut backend = match WireBackend::open(&self.root) {
+        let mut backend = match WireBackend::open(&self.root, self.extensions()) {
             Ok(backend) => {
                 if let Some(ready) = ready {
                     let _ = ready.send(Ok(()));
@@ -199,7 +216,7 @@ impl PgliteProxy {
     /// Accept and handle `count` Unix-domain socket connections using one embedded backend.
     #[cfg(unix)]
     pub fn accept_unix_connections(&self, listener: &UnixListener, count: usize) -> Result<()> {
-        let mut backend = WireBackend::open(&self.root)?;
+        let mut backend = WireBackend::open(&self.root, self.extensions())?;
         for _ in 0..count {
             let (stream, _) = listener.accept().context("accept Unix proxy connection")?;
             self.handle_stream(stream, &mut backend)?;
@@ -240,9 +257,17 @@ impl PgliteProxy {
                     }
                     FrontendMessageKind::Startup => {
                         flush_protocol_batch(&mut protocol_batch, backend, &mut stream)?;
-                        stream
-                            .write_all(&startup_response())
-                            .context("write startup response")?;
+                        match startup_response_for(&message)? {
+                            StartupResponse::Accept(response) => stream
+                                .write_all(&response)
+                                .context("write startup response")?,
+                            StartupResponse::Reject(response) => {
+                                stream
+                                    .write_all(&response)
+                                    .context("write startup rejection")?;
+                                close_after_flush = true;
+                            }
+                        }
                     }
                     FrontendMessageKind::Protocol => {
                         let flush_after = should_flush_protocol_batch(&message);
@@ -262,6 +287,16 @@ impl PgliteProxy {
         backend.rollback_connection_state();
         Ok(())
     }
+
+    #[cfg(feature = "extensions")]
+    fn extensions(&self) -> &[Extension] {
+        self.extensions.as_slice()
+    }
+
+    #[cfg(not(feature = "extensions"))]
+    fn extensions(&self) -> &[()] {
+        &[]
+    }
 }
 
 struct WireBackend {
@@ -270,20 +305,97 @@ struct WireBackend {
 }
 
 impl WireBackend {
-    fn open(root: &Path) -> Result<Self> {
+    #[cfg(feature = "extensions")]
+    fn open(root: &Path, extensions: &[Extension]) -> Result<Self> {
+        let outcome = install_into(root)?;
+        for extension in extensions {
+            let bytes = assets::extension_archive(extension.sql_name()).ok_or_else(|| {
+                anyhow!(
+                    "extension asset '{}' is not bundled in this pglite-oxide build",
+                    extension.sql_name()
+                )
+            })?;
+            install_bundled_extension_bytes(&outcome.paths, extension.sql_name(), bytes)?;
+        }
+        let mut pg = PostgresMod::new(outcome.paths)?;
+        for extension in extensions {
+            pg.preload_extension_module(*extension)?;
+        }
+        pg.ensure_cluster()?;
+        let transport = Transport::prepare(&mut pg)?;
+        let mut backend = Self { pg, transport };
+        backend.enable_extensions(extensions)?;
+        backend
+            .reset_session_state()
+            .context("initialize proxy backend session state")?;
+        Ok(backend)
+    }
+
+    #[cfg(not(feature = "extensions"))]
+    fn open(root: &Path, _extensions: &[()]) -> Result<Self> {
         let outcome = install_into(root)?;
         let mut pg = PostgresMod::new(outcome.paths)?;
         pg.ensure_cluster()?;
         let transport = Transport::prepare(&mut pg)?;
-        Ok(Self { pg, transport })
+        let mut backend = Self { pg, transport };
+        backend
+            .reset_session_state()
+            .context("initialize proxy backend session state")?;
+        Ok(backend)
+    }
+
+    #[cfg(feature = "extensions")]
+    fn enable_extensions(&mut self, extensions: &[Extension]) -> Result<()> {
+        for extension in extensions {
+            let sql = create_extension_sql(*extension);
+            let response = self
+                .send(&simple_query_message(&sql))
+                .with_context(|| format!("enable bundled extension '{}'", extension.sql_name()))?;
+            if response.first() == Some(&b'E') {
+                bail!(
+                    "enable bundled extension '{}' returned a Postgres error",
+                    extension.sql_name()
+                );
+            }
+        }
+        Ok(())
     }
 
     fn send(&mut self, message: &[u8]) -> Result<Vec<u8>> {
         self.transport.send(&mut self.pg, message, None)
     }
 
+    fn reject_copy_from_stdin(&mut self) -> Result<Vec<u8>> {
+        self.send(&simple_query_message(
+            "DO $$ BEGIN RAISE EXCEPTION USING \
+             ERRCODE = '0A000', \
+             MESSAGE = 'COPY FROM STDIN requires streaming protocol support and is not supported by pglite-oxide server mode yet'; \
+             END $$",
+        ))
+    }
+
+    fn synchronize_after_simple_query_error(&mut self) -> Result<()> {
+        let _ = self.send(&sync_message())?;
+        Ok(())
+    }
+
     fn rollback_connection_state(&mut self) {
-        let _ = self.send(&simple_query_message("ROLLBACK"));
+        let _ = self.reset_session_state();
+    }
+
+    fn reset_session_state(&mut self) -> Result<()> {
+        for sql in [
+            "ROLLBACK",
+            "DISCARD ALL",
+            "SET search_path TO public",
+            "SET TIME ZONE 'UTC'",
+        ] {
+            let response = self.send(&simple_query_message(sql))?;
+            if response.first() == Some(&b'E') {
+                bail!("reset proxy backend session state failed while running {sql}");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -376,6 +488,79 @@ fn classify_frontend_message(message: &[u8]) -> Result<FrontendMessageKind> {
     Ok(FrontendMessageKind::Protocol)
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StartupParams {
+    user: Option<String>,
+    database: Option<String>,
+}
+
+enum StartupResponse {
+    Accept(Vec<u8>),
+    Reject(Vec<u8>),
+}
+
+fn startup_response_for(message: &[u8]) -> Result<StartupResponse> {
+    let params = parse_startup_params(message)?;
+    let user = params.user.as_deref().unwrap_or("postgres");
+    let database = params.database.as_deref().unwrap_or(user);
+
+    if user != "postgres" {
+        return Ok(StartupResponse::Reject(startup_error_response(
+            "28000",
+            "pglite-oxide local server only supports user \"postgres\"",
+        )));
+    }
+    if database != "template1" {
+        return Ok(StartupResponse::Reject(startup_error_response(
+            "3D000",
+            "pglite-oxide local server only supports database \"template1\"",
+        )));
+    }
+
+    Ok(StartupResponse::Accept(startup_response()))
+}
+
+fn parse_startup_params(message: &[u8]) -> Result<StartupParams> {
+    if message.len() < 8 {
+        bail!("startup packet is too short");
+    }
+    let code = i32::from_be_bytes(message[4..8].try_into().unwrap());
+    if code != PROTOCOL_3 {
+        bail!("startup packet has unsupported protocol code {code}");
+    }
+
+    let mut cursor = 8usize;
+    let mut params = StartupParams::default();
+    while cursor < message.len() {
+        if message[cursor] == 0 {
+            break;
+        }
+        let key = read_startup_cstring(message, &mut cursor)?;
+        if cursor >= message.len() {
+            bail!("startup packet key {key:?} is missing a value");
+        }
+        let value = read_startup_cstring(message, &mut cursor)?;
+        match key.as_str() {
+            "user" => params.user = Some(value),
+            "database" => params.database = Some(value),
+            _ => {}
+        }
+    }
+    Ok(params)
+}
+
+fn read_startup_cstring(message: &[u8], cursor: &mut usize) -> Result<String> {
+    let start = *cursor;
+    let end = message[start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map(|offset| start + offset)
+        .ok_or_else(|| anyhow!("startup packet contains an unterminated string"))?;
+    *cursor = end + 1;
+    String::from_utf8(message[start..end].to_vec())
+        .context("startup packet contains non-UTF-8 parameter")
+}
+
 fn should_flush_protocol_batch(message: &[u8]) -> bool {
     matches!(message.first(), Some(b'Q' | b'S' | b'H'))
 }
@@ -392,7 +577,15 @@ where
         return Ok(());
     }
 
-    let response = backend.send(protocol_batch)?;
+    let is_simple_query = is_simple_query_message(protocol_batch);
+    let response = if simple_query_contains_copy_from_stdin(protocol_batch) {
+        backend.reject_copy_from_stdin()?
+    } else {
+        backend.send(protocol_batch)?
+    };
+    if is_simple_query && response_contains_error(&response) {
+        backend.synchronize_after_simple_query_error()?;
+    }
     protocol_batch.clear();
     if !response.is_empty() {
         stream
@@ -403,6 +596,184 @@ where
     Ok(())
 }
 
+fn is_simple_query_message(message: &[u8]) -> bool {
+    message.first() == Some(&b'Q')
+}
+
+fn simple_query_contains_copy_from_stdin(message: &[u8]) -> bool {
+    let Some(sql) = simple_query_sql(message) else {
+        return false;
+    };
+    sql_contains_copy_from_stdin(sql)
+}
+
+fn simple_query_sql(message: &[u8]) -> Option<&str> {
+    if !is_simple_query_message(message) || message.len() < 6 {
+        return None;
+    }
+    let len = i32::from_be_bytes(message[1..5].try_into().ok()?);
+    if len < 5 {
+        return None;
+    }
+    let len = len as usize;
+    if len.checked_add(1)? != message.len() || *message.last()? != 0 {
+        return None;
+    }
+    std::str::from_utf8(&message[5..message.len() - 1]).ok()
+}
+
+fn sql_contains_copy_from_stdin(sql: &str) -> bool {
+    let mut in_copy_statement = false;
+    let mut saw_from = false;
+
+    for token in sql_word_tokens(sql) {
+        if token == ";" {
+            in_copy_statement = false;
+            saw_from = false;
+            continue;
+        }
+        if !in_copy_statement {
+            in_copy_statement = token == "COPY";
+            saw_from = false;
+            continue;
+        }
+        if saw_from && token == "STDIN" {
+            return true;
+        }
+        saw_from = token == "FROM";
+    }
+
+    false
+}
+
+fn sql_word_tokens(sql: &str) -> Vec<String> {
+    let bytes = sql.as_bytes();
+    let mut tokens = Vec::new();
+    let mut cursor = 0usize;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' => cursor = skip_single_quoted(bytes, cursor),
+            b'"' => cursor = skip_double_quoted(bytes, cursor),
+            b'-' if bytes.get(cursor + 1) == Some(&b'-') => {
+                cursor = skip_line_comment(bytes, cursor + 2);
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = skip_block_comment(bytes, cursor + 2);
+            }
+            b'$' => {
+                if let Some(next) = skip_dollar_quoted(bytes, cursor) {
+                    cursor = next;
+                } else {
+                    cursor += 1;
+                }
+            }
+            b';' => {
+                tokens.push(";".to_owned());
+                cursor += 1;
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let start = cursor;
+                cursor += 1;
+                while cursor < bytes.len()
+                    && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+                {
+                    cursor += 1;
+                }
+                tokens.push(sql[start..cursor].to_ascii_uppercase());
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    tokens
+}
+
+fn skip_single_quoted(bytes: &[u8], mut cursor: usize) -> usize {
+    cursor += 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'\'' {
+            cursor += 1;
+            if bytes.get(cursor) == Some(&b'\'') {
+                cursor += 1;
+                continue;
+            }
+            break;
+        }
+        cursor += 1;
+    }
+    cursor
+}
+
+fn skip_double_quoted(bytes: &[u8], mut cursor: usize) -> usize {
+    cursor += 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"' {
+            cursor += 1;
+            if bytes.get(cursor) == Some(&b'"') {
+                cursor += 1;
+                continue;
+            }
+            break;
+        }
+        cursor += 1;
+    }
+    cursor
+}
+
+fn skip_line_comment(bytes: &[u8], mut cursor: usize) -> usize {
+    while cursor < bytes.len() && bytes[cursor] != b'\n' {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn skip_block_comment(bytes: &[u8], mut cursor: usize) -> usize {
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
+            return cursor + 2;
+        }
+        cursor += 1;
+    }
+    bytes.len()
+}
+
+fn skip_dollar_quoted(bytes: &[u8], cursor: usize) -> Option<usize> {
+    let mut end = cursor + 1;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    if bytes.get(end) != Some(&b'$') {
+        return None;
+    }
+    let delimiter = &bytes[cursor..=end];
+    let body_start = end + 1;
+    bytes[body_start..]
+        .windows(delimiter.len())
+        .position(|window| window == delimiter)
+        .map(|offset| body_start + offset + delimiter.len())
+}
+
+fn response_contains_error(response: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    while cursor + 5 <= response.len() {
+        let tag = response[cursor];
+        let len = i32::from_be_bytes(response[cursor + 1..cursor + 5].try_into().unwrap());
+        if len < 4 {
+            return false;
+        }
+        let total = 1usize.saturating_add(len as usize);
+        if cursor + total > response.len() {
+            return false;
+        }
+        if tag == b'E' {
+            return true;
+        }
+        cursor += total;
+    }
+    false
+}
+
 fn startup_response() -> Vec<u8> {
     let mut response = Vec::new();
     push_authentication_ok(&mut response);
@@ -410,10 +781,32 @@ fn startup_response() -> Vec<u8> {
     push_parameter_status(&mut response, "server_encoding", "UTF8");
     push_parameter_status(&mut response, "client_encoding", "UTF8");
     push_parameter_status(&mut response, "DateStyle", "ISO, MDY");
+    push_parameter_status(&mut response, "TimeZone", "UTC");
     push_parameter_status(&mut response, "integer_datetimes", "on");
     push_backend_key_data(&mut response, 0, 0);
     push_ready_for_query(&mut response, b'I');
     response
+}
+
+fn startup_error_response(sqlstate: &str, message: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_error_field(&mut body, b'S', "FATAL");
+    push_error_field(&mut body, b'V', "FATAL");
+    push_error_field(&mut body, b'C', sqlstate);
+    push_error_field(&mut body, b'M', message);
+    body.push(0);
+
+    let mut response = Vec::with_capacity(body.len() + 5);
+    response.push(b'E');
+    response.extend_from_slice(&((body.len() + 4) as i32).to_be_bytes());
+    response.extend_from_slice(&body);
+    response
+}
+
+fn push_error_field(out: &mut Vec<u8>, field: u8, value: &str) {
+    out.push(field);
+    out.extend_from_slice(value.as_bytes());
+    out.push(0);
 }
 
 fn push_authentication_ok(out: &mut Vec<u8>) {
@@ -452,6 +845,10 @@ fn simple_query_message(sql: &str) -> Vec<u8> {
     message.extend_from_slice(sql.as_bytes());
     message.push(0);
     message
+}
+
+fn sync_message() -> [u8; 5] {
+    [b'S', 0, 0, 0, 4]
 }
 
 #[cfg(test)]
@@ -513,6 +910,50 @@ mod tests {
     }
 
     #[test]
+    fn parses_startup_user_and_database() -> Result<()> {
+        let message = startup_packet(&[("user", "postgres"), ("database", "template1")]);
+        let params = parse_startup_params(&message)?;
+        assert_eq!(params.user.as_deref(), Some("postgres"));
+        assert_eq!(params.database.as_deref(), Some("template1"));
+        Ok(())
+    }
+
+    #[test]
+    fn startup_response_accepts_only_supported_identity() -> Result<()> {
+        let accepted = startup_response_for(&startup_packet(&[
+            ("user", "postgres"),
+            ("database", "template1"),
+        ]))?;
+        assert!(matches!(accepted, StartupResponse::Accept(_)));
+
+        let rejected_user = startup_response_for(&startup_packet(&[
+            ("user", "alice"),
+            ("database", "template1"),
+        ]))?;
+        match rejected_user {
+            StartupResponse::Reject(response) => {
+                assert_error_code(&response, "28000");
+                assert!(String::from_utf8_lossy(&response).contains("postgres"));
+            }
+            StartupResponse::Accept(_) => panic!("unsupported user must be rejected"),
+        }
+
+        let rejected_database = startup_response_for(&startup_packet(&[
+            ("user", "postgres"),
+            ("database", "postgres"),
+        ]))?;
+        match rejected_database {
+            StartupResponse::Reject(response) => {
+                assert_error_code(&response, "3D000");
+                assert!(String::from_utf8_lossy(&response).contains("template1"));
+            }
+            StartupResponse::Accept(_) => panic!("unsupported database must be rejected"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn protocol_batch_flushes_on_client_boundaries() {
         assert!(should_flush_protocol_batch(b"Q\0\0\0\rSELECT 1\0"));
         assert!(should_flush_protocol_batch(b"S\0\0\0\x04"));
@@ -521,5 +962,65 @@ mod tests {
         assert!(!should_flush_protocol_batch(b"B\0\0\0\x04"));
         assert!(!should_flush_protocol_batch(b"D\0\0\0\x04"));
         assert!(!should_flush_protocol_batch(b"E\0\0\0\x04"));
+    }
+
+    #[test]
+    fn response_error_detection_scans_backend_messages() {
+        let mut response = Vec::new();
+        push_parameter_status(&mut response, "TimeZone", "UTC");
+        response.push(b'E');
+        response.extend_from_slice(&6_i32.to_be_bytes());
+        response.extend_from_slice(b"S\0");
+        push_ready_for_query(&mut response, b'I');
+
+        assert!(response_contains_error(&response));
+        assert!(!response_contains_error(&startup_response()));
+    }
+
+    #[test]
+    fn copy_from_stdin_detection_ignores_literals_comments_and_quoted_identifiers() {
+        assert!(sql_contains_copy_from_stdin(
+            "CREATE TABLE items(value text); COPY items(value) FROM STDIN WITH CSV"
+        ));
+        assert!(sql_contains_copy_from_stdin(
+            "/* comment */ copy public.items from stdin"
+        ));
+        assert!(!sql_contains_copy_from_stdin(
+            "SELECT 'COPY items FROM STDIN' AS text"
+        ));
+        assert!(!sql_contains_copy_from_stdin(
+            "SELECT $$ COPY items FROM STDIN $$ AS text"
+        ));
+        assert!(!sql_contains_copy_from_stdin("COPY items TO STDOUT"));
+        assert!(!sql_contains_copy_from_stdin(
+            "COPY items FROM '/tmp/input.csv'"
+        ));
+        assert!(!sql_contains_copy_from_stdin(
+            "SELECT \"copy\" FROM stdin_table"
+        ));
+    }
+
+    fn startup_packet(params: &[(&str, &str)]) -> Vec<u8> {
+        let mut message = Vec::new();
+        message.extend_from_slice(&[0, 0, 0, 0]);
+        message.extend_from_slice(&PROTOCOL_3.to_be_bytes());
+        for (key, value) in params {
+            message.extend_from_slice(key.as_bytes());
+            message.push(0);
+            message.extend_from_slice(value.as_bytes());
+            message.push(0);
+        }
+        message.push(0);
+        let len = message.len() as i32;
+        message[..4].copy_from_slice(&len.to_be_bytes());
+        message
+    }
+
+    fn assert_error_code(response: &[u8], expected: &str) {
+        assert_eq!(response.first(), Some(&b'E'));
+        let code = response
+            .windows(expected.len())
+            .any(|window| window == expected.as_bytes());
+        assert!(code, "response did not contain SQLSTATE {expected}");
     }
 }

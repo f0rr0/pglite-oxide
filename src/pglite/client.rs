@@ -8,9 +8,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use crate::pglite::base::PglitePaths;
+use crate::pglite::aot;
+#[cfg(feature = "extensions")]
+use crate::pglite::assets;
+#[cfg(feature = "extensions")]
+use crate::pglite::base::install_bundled_extension_bytes;
+use crate::pglite::base::{PglitePaths, RootLock};
 use crate::pglite::builder::PgliteBuilder;
 use crate::pglite::errors::PgliteError;
+#[cfg(feature = "extensions")]
+use crate::pglite::extensions::{Extension, create_extension_sql};
 use crate::pglite::interface::{
     DataTransferContainer, DescribeQueryParam, DescribeQueryResult, DescribeResultField,
     ExecProtocolOptions, ExecProtocolResult, ParserMap, QueryOptions, Results, Serializer,
@@ -71,6 +78,7 @@ struct GlobalListener {
 pub struct Pglite {
     pg: PostgresMod,
     _temp_dir: Option<TempDir>,
+    _root_lock: Option<RootLock>,
     transport: Transport,
     parser: ProtocolParser,
     serializers: SerializerMap,
@@ -108,6 +116,35 @@ impl Pglite {
         Self::builder().temporary().open()
     }
 
+    /// Warm the runtime module and bundled AOT artifact cache without opening a database.
+    pub fn preload() -> Result<()> {
+        let (temp_dir, paths) = PglitePaths::with_temp_dir()?;
+        crate::pglite::base::preload_runtime_module(&paths)?;
+        aot::preload_runtime_artifact()?;
+        drop(temp_dir);
+        Ok(())
+    }
+
+    /// Warm bundled extension artifacts without permanently opening a database.
+    #[cfg(feature = "extensions")]
+    pub fn preload_extensions(extensions: impl IntoIterator<Item = Extension>) -> Result<()> {
+        Self::preload()?;
+        for extension in extensions {
+            let bytes = assets::extension_archive(extension.sql_name()).ok_or_else(|| {
+                anyhow!(
+                    "extension asset '{}' is not bundled in this pglite-oxide build",
+                    extension.sql_name()
+                )
+            })?;
+            let (temp_dir, paths) = PglitePaths::with_temp_dir()?;
+            crate::pglite::base::preload_runtime_module(&paths)?;
+            install_bundled_extension_bytes(&paths, extension.sql_name(), bytes)?;
+            aot::preload_extension_artifact(extension)?;
+            drop(temp_dir);
+        }
+        Ok(())
+    }
+
     /// Create a new Pglite instance backed by the provided runtime paths.
     #[doc(hidden)]
     pub fn new(paths: PglitePaths) -> Result<Self> {
@@ -118,6 +155,7 @@ impl Pglite {
         let mut instance = Self {
             pg,
             _temp_dir: None,
+            _root_lock: None,
             transport,
             parser: ProtocolParser::new(),
             serializers: DEFAULT_SERIALIZERS.clone(),
@@ -134,9 +172,25 @@ impl Pglite {
             next_global_listener_id: 1,
         };
 
-        instance.exec_internal("SET search_path TO public;", None)?;
+        instance.exec_internal("SET search_path TO public; SET TIME ZONE 'UTC';", None)?;
         instance.init_array_types(true)?;
         Ok(instance)
+    }
+
+    /// Install and enable a bundled Postgres extension.
+    #[cfg(feature = "extensions")]
+    pub fn enable_extension(&mut self, extension: Extension) -> Result<()> {
+        let bytes = assets::extension_archive(extension.sql_name()).ok_or_else(|| {
+            anyhow!(
+                "extension asset '{}' is not bundled in this pglite-oxide build",
+                extension.sql_name()
+            )
+        })?;
+        install_bundled_extension_bytes(self.paths(), extension.sql_name(), bytes)?;
+        self.pg.preload_extension_module(extension)?;
+        let sql = create_extension_sql(extension);
+        self.exec(&sql, None)?;
+        Ok(())
     }
 
     /// Execute a SQL query using the extended protocol.
@@ -178,14 +232,18 @@ impl Pglite {
                 &query_opts.param_types
             };
 
-            let parse_msg = Serialize::parse(None, sql, param_types);
+            let mut prepare_batch = Vec::new();
+            prepare_batch.extend(Serialize::parse(None, sql, param_types));
+            prepare_batch.extend(Serialize::describe(&PortalTarget::new('S', None)));
+            prepare_batch.extend(Serialize::sync());
             let ExecProtocolResult { messages } =
-                self.exec_protocol(&parse_msg, exec_opts.clone())?;
-            collected_messages.extend(messages);
-
-            let describe_msg = Serialize::describe(&PortalTarget::new('S', None));
-            let ExecProtocolResult { messages } =
-                self.exec_protocol(&describe_msg, exec_opts.clone())?;
+                self.exec_protocol(&prepare_batch, exec_opts.clone())?;
+            if !messages
+                .iter()
+                .any(|message| matches!(message, BackendMessage::ParseComplete { .. }))
+            {
+                bail!("extended query parse did not complete");
+            }
             let data_type_ids = parse_describe_statement_results(&messages);
             collected_messages.extend(messages);
 
@@ -194,31 +252,17 @@ impl Pglite {
                 values: bind_values,
                 ..Default::default()
             };
-            let bind_msg = Serialize::bind(&bind_config);
+            let mut execute_batch = Vec::new();
+            execute_batch.extend(Serialize::bind(&bind_config));
+            execute_batch.extend(Serialize::describe(&PortalTarget::new('P', None)));
+            execute_batch.extend(Serialize::execute(None));
+            execute_batch.extend(Serialize::sync());
             let ExecProtocolResult { messages } =
-                self.exec_protocol(&bind_msg, exec_opts.clone())?;
-            collected_messages.extend(messages);
-
-            let describe_portal = Serialize::describe(&PortalTarget::new('P', None));
-            let ExecProtocolResult { messages } =
-                self.exec_protocol(&describe_portal, exec_opts.clone())?;
-            collected_messages.extend(messages);
-
-            let exec_msg = Serialize::execute(None);
-            let ExecProtocolResult { messages } =
-                self.exec_protocol(&exec_msg, exec_opts.clone())?;
+                self.exec_protocol(&execute_batch, exec_opts.clone())?;
             collected_messages.extend(messages);
 
             Ok(())
         })();
-
-        match self.exec_protocol(&Serialize::sync(), exec_opts.clone()) {
-            Ok(ExecProtocolResult { messages }) => collected_messages.extend(messages),
-            Err(err) if result.is_ok() => {
-                return Err(err.context(format!("failed to synchronize extended query: {sql}")));
-            }
-            Err(_) => {}
-        }
 
         if let Err(err) = result {
             match err.downcast::<DatabaseError>() {
@@ -248,6 +292,10 @@ impl Pglite {
 
     pub(crate) fn attach_temp_dir(&mut self, temp_dir: TempDir) {
         self._temp_dir = Some(temp_dir);
+    }
+
+    pub(crate) fn attach_root_lock(&mut self, root_lock: RootLock) {
+        self._root_lock = Some(root_lock);
     }
 
     /// Return `true` if the instance has already been closed.
@@ -283,6 +331,7 @@ impl Pglite {
             self.ready = false;
             self.notify_listeners.clear();
             self.global_notify_listeners.clear();
+            self._root_lock = None;
         }
         result
     }
@@ -435,25 +484,22 @@ impl Pglite {
                 &query_opts.param_types
             };
 
-            let parse_msg = Serialize::parse(None, sql, param_types);
-            // Ignore returned messages; we just need to ensure the statement parses.
-            let _ = self.exec_protocol(&parse_msg, exec_opts.clone())?;
-
-            let describe_msg = Serialize::describe(&PortalTarget::new('S', None));
+            let mut describe_batch = Vec::new();
+            describe_batch.extend(Serialize::parse(None, sql, param_types));
+            describe_batch.extend(Serialize::describe(&PortalTarget::new('S', None)));
+            describe_batch.extend(Serialize::sync());
             let ExecProtocolResult { messages } =
-                self.exec_protocol(&describe_msg, exec_opts.clone())?;
+                self.exec_protocol(&describe_batch, exec_opts.clone())?;
+            if !messages
+                .iter()
+                .any(|message| matches!(message, BackendMessage::ParseComplete { .. }))
+            {
+                bail!("extended query parse did not complete");
+            }
             describe_messages.extend(messages);
 
             Ok(())
         })();
-
-        match self.exec_protocol(&Serialize::sync(), exec_opts.clone()) {
-            Ok(ExecProtocolResult { messages }) => describe_messages.extend(messages),
-            Err(err) if result.is_ok() => {
-                return Err(err.context(format!("failed to synchronize describe query: {sql}")));
-            }
-            Err(_) => {}
-        }
 
         if let Err(err) = result {
             match err.downcast::<DatabaseError>() {
@@ -791,7 +837,7 @@ impl Pglite {
     }
 
     fn dev_blob_path(&self) -> PathBuf {
-        self.pg.paths().pgroot.join("dev/blob")
+        self.pg.paths().runtime_root().join("dev/blob")
     }
 
     fn cleanup_blob(&mut self) -> Result<()> {

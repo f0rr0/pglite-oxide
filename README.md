@@ -6,19 +6,16 @@
 [![MSRV](https://img.shields.io/badge/msrv-1.92-blue)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT%20AND%20Apache--2.0%20AND%20PostgreSQL-blue)](https://github.com/f0rr0/pglite-oxide#license)
 
-`pglite-oxide` embeds the [Electric SQL PGlite](https://github.com/electric-sql/pglite)
-WASI PostgreSQL runtime in Rust. It gives Rust apps a local Postgres-compatible
-database without shipping a native Postgres sidecar.
+Embedded Postgres for Rust tests and local apps. No Docker, works with SQLx and
+any Postgres client.
 
 Use it when you want:
 
-- local Postgres semantics in a Rust or Tauri app
+- local Postgres semantics in a Rust, Tauri, or desktop AI app
 - fast Postgres-backed tests without Docker or testcontainers
-- a PostgreSQL connection URI for crates such as SQLx or `tokio-postgres`
-- a small, embedded database boundary that stays on the Rust side of the app
+- a PostgreSQL connection URI for SQLx, `tokio-postgres`, Python, Go, Node, or any other client
 
-The crate currently targets PostgreSQL 17.x PGlite builds, Rust 1.92+, and
-Wasmtime 44.
+The crate targets PostgreSQL 17.x PGlite builds and Rust 1.92+.
 
 ## Install
 
@@ -26,8 +23,9 @@ Wasmtime 44.
 cargo add pglite-oxide serde_json
 ```
 
-The default path uses the bundled PGDATA template and compiled Wasmtime module
-cache. There are no startup flags to remember for ordinary apps.
+Default features include bundled runtime assets and cache warming hooks.
+Size-sensitive builds can opt out with `default-features = false` and provide
+runtime assets explicitly.
 
 ## Direct Embedded API
 
@@ -73,7 +71,7 @@ use sqlx::{Connection, Row};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = PgliteServer::temporary_tcp()?;
-    let mut conn = sqlx::PgConnection::connect(&server.connection_uri()).await?;
+    let mut conn = sqlx::PgConnection::connect(&server.database_url()).await?;
 
     let row = sqlx::query("SELECT $1::int4 + 1 AS answer")
         .bind(41_i32)
@@ -89,10 +87,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For app persistence, use `PgliteServer::builder().path("./.pglite").start()?`.
 
+For non-Rust tests:
+
+```sh
+pglite-proxy --temporary --tcp 127.0.0.1:0 --print-uri
+```
+
+Use the printed URL with your normal Postgres client library.
+
+## How It Works
+
+`pglite-oxide` is moving to a WASIX dynamic-linking asset pipeline. CI owns the
+expensive work: building PGlite, extension side modules, `pg_dump`, and
+target-specific Wasmer LLVM AOT artifacts. Application code gets a small API,
+preload hooks, and package-managed assets.
+
+The pgvector path is staged in that pipeline and will become public only after
+the Rust runtime passes `CREATE EXTENSION vector`, vector insert, and distance
+query smoke tests.
+
 ## Docs
 
 - [Usage guide](https://github.com/f0rr0/pglite-oxide/blob/main/docs/USAGE.md)
+- [Extensions](https://github.com/f0rr0/pglite-oxide/blob/main/docs/EXTENSIONS.md)
 - [Runtime and performance notes](https://github.com/f0rr0/pglite-oxide/blob/main/docs/RUNTIME.md)
+- [Performance plan](https://github.com/f0rr0/pglite-oxide/blob/main/docs/PERFORMANCE.md)
+- [pg_dump status](https://github.com/f0rr0/pglite-oxide/blob/main/docs/PG_DUMP.md)
 - [Tauri usage](https://github.com/f0rr0/pglite-oxide/blob/main/docs/TAURI.md)
 - [Tauri SQLx profiler example](https://github.com/f0rr0/pglite-oxide/blob/main/examples/tauri-sqlx-vanilla)
 - [Development guide](https://github.com/f0rr0/pglite-oxide/blob/main/docs/DEVELOPMENT.md)

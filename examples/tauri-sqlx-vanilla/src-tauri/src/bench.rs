@@ -110,7 +110,7 @@ impl DatabaseHarness {
         .await?;
 
         let preload_paths = paths.clone();
-        time_blocking(&mut startup, "load/compile wasmtime module", move || {
+        time_blocking(&mut startup, "load Wasmer AOT module", move || {
             preload_runtime_module(&preload_paths)
         })
         .await?;

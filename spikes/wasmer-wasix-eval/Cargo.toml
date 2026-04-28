@@ -1,0 +1,24 @@
+[package]
+name = "wasmer-wasix-eval"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+llvm-engine = ["wasmer/llvm"]
+
+[dependencies]
+anyhow = "1"
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "net", "rt-multi-thread", "time"] }
+wasmer = { version = "7.2.0-alpha.2", features = ["cranelift", "singlepass"] }
+wasmer-types = "7.2.0-alpha.2"
+wasmer-wasix = "0.702.0-alpha.2"
+wasmparser = "0.247"
+webc = "11.0.0"
+zstd = "0.13"

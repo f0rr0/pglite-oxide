@@ -1,5 +1,16 @@
 # Release Process
 
+Release automation is workspace-aware. `release-plz` owns version bumps for the
+root crate, `pglite-oxide-assets`, and every `pglite-oxide-aot-*` crate. Feature
+PRs should not edit package versions directly.
+
+The root crate is the only user-facing release and changelog. Asset and AOT
+crate changes are included in the root `CHANGELOG.md`, while those internal
+crates do not create separate GitHub releases or tags.
+
+Before publishing, CI packages every published crate and enforces crates.io's
+10 MB compressed `.crate` limit.
+
 `pglite-oxide` publishes source crates to crates.io with release-plz. The CLI
 binaries in this repository are maintenance helpers, so the release path
 deliberately avoids binary artifact tooling such as cargo-dist until there is a

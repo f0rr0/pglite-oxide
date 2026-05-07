@@ -138,8 +138,9 @@ The manual publish job uses `release_always = true` because the workflow is not
 triggered on every merge; it only runs when a maintainer explicitly selects a
 publish operation. The job fails if release-plz reports that it created no
 release, so a green publish run means a crate/GitHub release was actually
-produced. The dry-run and publish action steps are intentionally separate so the
-real publish step omits the `dry_run` input entirely.
+produced. The dry-run operation stops after staged package validation because
+same-release internal crates are not present in crates.io until the real
+release-plz publish step.
 
 The publish job also validates release-note readiness before running expensive
 package checks. The current root package version must be the first release
@@ -151,7 +152,7 @@ publishing.
 release-plz publishes unpublished package versions to crates.io, creates the
 bare SemVer tag such as `0.4.0`, and creates the GitHub release from the
 generated changelog. The root crate depends on internal crates with exact
-versions. Plain Cargo cannot fully dry-run the root crate before those exact
-internal versions exist in the registry, so validation dry-runs every internal
-crate, enforces package sizes, attempts the root checks, and leaves final
-workspace publish ordering to release-plz.
+versions. Plain Cargo and release-plz dry-runs cannot fully dry-run the root
+crate before those exact internal versions exist in the registry, so validation
+dry-runs every internal crate, enforces package sizes, attempts the root checks,
+and leaves final workspace publish ordering to the real release-plz publish.

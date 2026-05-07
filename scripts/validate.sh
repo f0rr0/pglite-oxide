@@ -4,7 +4,11 @@ set -eu
 mode="${1:-pre-push}"
 shift || true
 
-root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [ "${PGLITE_OXIDE_RELEASE_STAGED:-0}" = "1" ]; then
+  root="$(pwd)"
+else
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
 cd "$root"
 
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"

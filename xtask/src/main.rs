@@ -5367,13 +5367,64 @@ fn asset_input_fingerprint() -> Result<String> {
 
     let mut hasher = Sha256::new();
     for file in files {
-        let bytes = fs::read(&file).with_context(|| format!("read {file}"))?;
+        let bytes = asset_input_fingerprint_bytes(&file)?;
         hasher.update(file.as_bytes());
         hasher.update([0]);
         hasher.update(sha256_bytes(&bytes).as_bytes());
         hasher.update([0]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn asset_input_fingerprint_bytes(file: &str) -> Result<Vec<u8>> {
+    let bytes = fs::read(file).with_context(|| format!("read {file}"))?;
+    if !is_internal_asset_package_manifest(file) {
+        return Ok(bytes);
+    }
+
+    let text = String::from_utf8(bytes).with_context(|| format!("read {file} as UTF-8"))?;
+    Ok(normalize_internal_asset_package_manifest(&text).into_bytes())
+}
+
+fn is_internal_asset_package_manifest(file: &str) -> bool {
+    file == "crates/assets/Cargo.toml"
+        || (file.starts_with("crates/aot/") && file.ends_with("/Cargo.toml"))
+}
+
+fn normalize_internal_asset_package_manifest(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut in_package = false;
+
+    for chunk in text.split_inclusive('\n') {
+        let line = chunk.strip_suffix('\n').unwrap_or(chunk);
+        let logical = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = logical.trim();
+        if trimmed.starts_with('[') {
+            in_package = trimmed == "[package]";
+        }
+
+        if in_package && is_toml_key(logical, "version") {
+            let indent_len = logical.len() - logical.trim_start().len();
+            normalized.push_str(&logical[..indent_len]);
+            normalized.push_str("version = \"<release-version>\"");
+            if line.ends_with('\r') {
+                normalized.push('\r');
+            }
+            if chunk.ends_with('\n') {
+                normalized.push('\n');
+            }
+        } else {
+            normalized.push_str(chunk);
+        }
+    }
+
+    normalized
+}
+
+fn is_toml_key(line: &str, key: &str) -> bool {
+    line.trim_start()
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
 fn verify_asset_manifest_hashes() -> Result<()> {

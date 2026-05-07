@@ -182,16 +182,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust-tools
+        with:
+          cache-save-if: ${{ env.RUST_CACHE_SAVE_IF }}
+
       - name: Download portable WASIX build outputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: pglite-oxide-portable-wasix
           path: .
-
-      - name: Set up Rust tooling
-        uses: ./.github/actions/setup-rust-tools
-        with:
-          cache-save-if: ${{ env.RUST_CACHE_SAVE_IF }}
 
       - name: Install Wasmer LLVM 22.1 for AOT generation
         uses: ./.github/actions/setup-wasmer-llvm

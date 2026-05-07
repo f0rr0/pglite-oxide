@@ -55,11 +55,41 @@ jobs:
           cache: "false"
 
       - name: Create or update release PR
+        id: release_plz_pr
         uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Refresh release PR example lockfiles
+        if: ${{ steps.release_plz_pr.outputs.pr != '' && steps.release_plz_pr.outputs.pr != 'null' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.release_plz_pr.outputs.pr }}
+        run: |
+          set -euo pipefail
+
+          pr_number="$(jq -r '.number // empty' <<< "${PR}")"
+          if [[ -z "${pr_number}" ]]; then
+            echo "release-plz did not return a release PR; skipping example lockfile refresh"
+            exit 0
+          fi
+
+          gh auth setup-git
+          gh pr checkout "${pr_number}"
+          scripts/sync-example-lockfiles.py
+
+          if git diff --quiet -- examples/tauri-sqlx-vanilla/src-tauri/Cargo.lock; then
+            echo "example lockfiles already current"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add examples/tauri-sqlx-vanilla/src-tauri/Cargo.lock
+          git commit -m "chore(release): refresh example lockfiles"
+          git push
 
   publish:
     name: Publish release

@@ -38,5 +38,6 @@ hooks = [
   { id = "git-diff-check", name = "git diff --check", language = "system", entry = "git diff --check", pass_filenames = false, always_run = true, stages = ["pre-push"] },
   { id = "pre-push-fmt", name = "pre-push cargo fmt", language = "system", entry = "cargo fmt --all --check", pass_filenames = false, always_run = true, stages = ["pre-push"] },
   { id = "asset-input-fingerprint", name = "asset input fingerprint", language = "system", entry = "scripts/check-asset-input-fingerprint.sh", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+  { id = "example-lockfiles", name = "example lockfiles", language = "system", entry = "scripts/check-example-lockfiles.sh", pass_filenames = false, always_run = true, stages = ["pre-push"] },
   { id = "pre-push-check", name = "pre-push cargo check", language = "system", entry = "cargo check --workspace --locked", pass_filenames = false, always_run = true, stages = ["pre-push"] },
 ]

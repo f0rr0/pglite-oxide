@@ -9,5 +9,6 @@ node_modules/
 /crates/assets/assets/
 /crates/aot/*/artifacts/
 **/.DS_Store
+__pycache__/
 # Build artifacts from cargo package
 pglite_oxide-*.crates.tar.gz

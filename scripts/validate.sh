@@ -245,6 +245,7 @@ validate_runtime() {
 validate_examples() {
   require cargo
   require npm
+  run scripts/sync-example-lockfiles.py --check
   run cargo check --manifest-path examples/tauri-sqlx-vanilla/src-tauri/Cargo.toml --locked
   run npm --prefix examples/tauri-sqlx-vanilla ci
   run npm --prefix examples/tauri-sqlx-vanilla run build

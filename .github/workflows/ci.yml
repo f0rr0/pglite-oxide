@@ -93,7 +93,7 @@ jobs:
         uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8
 
       - name: Audit GitHub Actions workflows
-        uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e
+        uses: zizmorcore/zizmor-action@b572f7b1a1c2d41efaab43d504f68d215c3cd727
         with:
           advanced-security: false
           config: .github/zizmor.yml
@@ -279,7 +279,7 @@ jobs:
             examples/tauri-sqlx-vanilla/src-tauri -> target
 
       - name: Install Node.js
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 22
           cache: npm
@@ -362,7 +362,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check dependency policy
-        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb
+        uses: EmbarkStudios/cargo-deny-action@6c8f9facfa5047ec02d8485b6bf52b587b7777d1
 
   required:
     name: Required checks
